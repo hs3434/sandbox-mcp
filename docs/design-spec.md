@@ -62,7 +62,7 @@ Hermes Gateway (host process)
 6. **Stateful MCP server**: The server maintains a Target Registry and Shell Registry
    in memory. This is necessary for persistent shell sessions and target management.
 
-## Complete API (16 tools)
+## Complete API (19 tools)
 
 ### Backend-Specific: Creation & Backend-Unique Operations
 
@@ -265,8 +265,10 @@ Returns: `{"shell_id": "sh_xxx", "bytes_written": 5}`
 ### File Operations (replicates Hermes built-in file tools)
 
 All file operations accept an optional `target` parameter (default: active target).
-They execute shell commands in the target's default shell, replicating the behavior
-of Hermes' `ShellFileOperations`.
+They execute shell commands in the target's default shell (or a one-off exec if the
+default shell is busy), replicating the behavior of Hermes' `ShellFileOperations`.
+File operations do not accept `shell_id` -- they always use the target's default
+execution path.
 
 #### `sandbox_read`
 Read a text file with line numbers and pagination.
@@ -359,6 +361,11 @@ If the marker is not found within `timeout` seconds, the command is still runnin
 The server returns partial output with `status: "running"`. The agent can call
 `sandbox_shell_read` to get more output or `sandbox_shell_close` to kill it.
 
+**Busy shell behavior**: if a shell's previous command is still running (returned
+`status: "running"`), a new `sandbox_exec` on the same shell returns an error. The
+agent must either `sandbox_shell_read` to wait for completion, `sandbox_shell_close`
+to kill it, or `sandbox_shell_open` to start a new shell for concurrent work.
+
 ### Shell States
 
 - **idle**: no command running, bash is at prompt
@@ -436,7 +443,9 @@ skills, delegate_task, cronjob, image_generate, text_to_speech.
 ### Not Included (future versions)
 - PTY mode for interactive CLI tools
 - `sandbox_docker_images` (list available Docker images)
-- Shell session recovery after MCP server restart
+- Target and shell recovery after MCP server restart (Docker containers persist
+  on disk but the in-memory registry is lost; a future version could scan for
+  `sandbox-*` containers and re-register them)
 - Docker network management between containers
 - Docker Compose support
 - Resource limits (CPU/memory) per target
