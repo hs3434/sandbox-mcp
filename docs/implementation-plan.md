@@ -31,13 +31,15 @@ sandbox-mcp/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_shell_session.py
+│   ├── test_backends_base.py
 │   ├── test_docker_backend.py
 │   ├── test_ssh_backend.py
 │   ├── test_target_registry.py
 │   ├── test_shell_registry.py
 │   ├── test_file_operations.py
 │   ├── test_sandbox_env.py
-│   └── test_server.py
+│   ├── test_server.py
+│   └── test_integration_docker.py
 └── docs/
     ├── design-spec-v2.md       # current design
     └── implementation-plan.md  # this file
@@ -65,12 +67,19 @@ name = "sandbox-mcp"
 version = "0.2.0"
 description = "Sandbox Environment Manager MCP server"
 requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "Sandbox MCP Contributors"}]
 dependencies = [
     "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
+]
 
 [project.scripts]
 sandbox-mcp = "server:main"
@@ -78,6 +87,24 @@ sandbox-mcp = "server:main"
 [tool.setuptools]
 py-modules = ["server", "target_registry", "shell_registry", "shell_session", "sandbox_env", "file_operations"]
 packages = ["backends"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+disallow_untyped_defs = false
 ```
 
 - [ ] **Step 2: Create package init files**
@@ -1064,11 +1091,10 @@ class SSHBackend(Backend):
         user = kwargs.get("user", "")
         port = kwargs.get("port", 22)
         key = kwargs.get("key")
-        password = kwargs.get("password")
 
         self._targets[name] = {
             "host": host, "user": user, "port": port,
-            "key": key, "password": password,
+            "key": key,
             "socket": self._socket_path(name),
             "purpose": purpose,
             "started_at": time.time(),
@@ -1093,7 +1119,7 @@ class SSHBackend(Backend):
         """Reconnect SSH ControlMaster."""
         target = self._targets.get(name, {})
         return self.create(name, **{k: v for k, v in target.items()
-                                     if k in ("host", "user", "port", "key", "password")})
+                                     if k in ("host", "user", "port", "key")})
 
     def stop(self, name: str) -> TargetInfo:
         """Close the SSH master connection."""
@@ -1498,13 +1524,146 @@ File operations execute shell commands on targets via backend.
 
 - [ ] **Step 1: Write failing tests**
 
-Write tests for read_file with line numbers, pagination, not-found suggestions, and write_file with auto-mkdir and syntax check.
+```python
+# tests/test_file_operations.py
+import pytest
+from unittest.mock import MagicMock
+from file_operations import FileOperations
+
+
+@pytest.fixture
+def backend():
+    b = MagicMock()
+    return b
+
+
+@pytest.fixture
+def fops(backend):
+    return FileOperations(backend)
+
+
+def test_read_returns_line_numbered_output(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "line1\nline2\nline3\n",
+    }
+    result = fops.read("/tmp/x.txt", target="dev")
+    assert result["status"] == "ok"
+    assert result["path"] == "/tmp/x.txt"
+    assert "1|line1" in result["output"]
+    assert "3|line3" in result["output"]
+
+
+def test_read_pagination_offset_and_limit(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "line2\nline3\n",
+    }
+    result = fops.read("/tmp/x.txt", target="dev", offset=2, limit=2)
+    assert result["offset"] == 2
+    assert result["limit"] == 2
+    assert "1|line2" in result["output"]  # renumbered from offset
+    assert "2|line3" in result["output"]
+    assert "line1" not in result["output"]
+
+
+def test_read_not_found_returns_suggestions(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 1, "output": "",
+    }
+    backend.suggest_paths.return_value = ["/tmp/x.txt", "/tmp/x.txt.bak"]
+    result = fops.read("/tmp/missing.txt", target="dev")
+    assert result["status"] == "not_found"
+    assert result["suggestions"] == ["/tmp/x.txt", "/tmp/x.txt.bak"]
+
+
+def test_read_binary_returns_error(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "binary\x00data",
+    }
+    result = fops.read("/tmp/blob.bin", target="dev")
+    assert result["status"] == "binary"
+    assert "error" in result
+
+
+def test_write_creates_parent_dirs_and_writes(fops, backend):
+    backend.exec_oneoff.return_value = {"exit_code": 0, "output": ""}
+    result = fops.write("/tmp/new/dir/x.txt", "hello", target="dev")
+    assert result["status"] == "ok"
+    cmd = backend.exec_oneoff.call_args[0][1]
+    assert "mkdir -p" in cmd
+    assert "/tmp/new/dir/x.txt" in cmd
+
+
+def test_write_runs_syntax_check_when_extension_known(fops, backend):
+    backend.exec_oneoff.return_value = {"exit_code": 0, "output": ""}
+    fops.write("/tmp/x.py", "print(1)\n", target="dev")
+    calls = [c.args[1] for c in backend.exec_oneoff.call_args_list]
+    assert any("python -m py_compile" in cmd for cmd in calls)
+```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
+```bash
+pytest tests/test_file_operations.py -v
+```
+Expected: ImportError or 6 failed
+
 - [ ] **Step 3: Implement FileOperations (read + write)**
 
-Implement FileOperations read/write using `_exec` via `backend.exec_oneoff`.
+```python
+# file_operations.py
+"""File operations executed via a backend's one-off shell commands."""
+
+from __future__ import annotations
+
+import shlex
+from typing import Optional
+
+
+LINE_FMT = "{n}|{line}"  # each line is prefixed with its line number and a pipe
+
+
+class FileOperations:
+    def __init__(self, backend):
+        self._backend = backend
+
+    def read(self, path: str, target: str, offset: int = 1,
+             limit: int = 500) -> dict:
+        sed_range = f"{offset},{offset + limit - 1}p"
+        cmd = f"sed -n {shlex.quote(sed_range)} {shlex.quote(path)}"
+        result = self._backend.exec_oneoff(target, cmd)
+        if result.get("exit_code") not in (0, None):
+            suggestions = self._backend.suggest_paths(target, path)
+            return {"status": "not_found", "path": path,
+                    "suggestions": suggestions}
+        output = result.get("output", "")
+        if "\x00" in output:
+            return {"status": "binary", "path": path,
+                    "error": "binary file not readable as text"}
+        lines = output.splitlines()
+        numbered = [LINE_FMT.format(n=offset + i, line=l) for i, l in enumerate(lines)]
+        return {"status": "ok", "path": path,
+                "offset": offset, "limit": limit,
+                "output": "\n".join(numbered) + ("\n" if numbered else "")}
+
+    def write(self, path: str, content: str, target: str) -> dict:
+        self._backend.exec_oneoff(target, f"mkdir -p $(dirname {shlex.quote(path)})")
+        cmd = (f"cat > {shlex.quote(path)} <<'__SANDBOX_EOF__'\n"
+               f"{content}\n__SANDBOX_EOF__")
+        self._backend.exec_oneoff(target, cmd)
+        check = self._syntax_check(path, content)
+        if check is not None:
+            self._backend.exec_oneoff(target, check)
+        return {"status": "ok", "path": path}
+
+    def _syntax_check(self, path: str, content: str) -> Optional[str]:
+        if path.endswith(".py"):
+            return f"python -m py_compile {shlex.quote(path)}"
+        if path.endswith(".sh"):
+            return f"bash -n {shlex.quote(path)}"
+        if path.endswith(".json"):
+            return f"python -c 'import json,sys;json.load(open({shlex.quote(path)!r}))'"
+        return None
+```
 
 - [ ] **Step 4: Run tests**
 
@@ -1533,11 +1692,183 @@ Search uses ripgrep for content, find for files.
 
 - [ ] **Step 1: Write failing tests for patch and search**
 
+```python
+# tests/test_file_operations.py (additions)
+def test_patch_replace_mode_replaces_unique_string(fops, backend):
+    backend.exec_oneoff.side_effect = [
+        {"exit_code": 0, "output": "alpha\nbeta\ngamma\n"},  # cat
+        {"exit_code": 0, "output": ""},                      # write back
+    ]
+    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+                       old_string="beta", new_string="BETA")
+    assert result["status"] == "ok"
+    assert result["matches"] == 1
+
+
+def test_patch_replace_mode_returns_diff(fops, backend):
+    backend.exec_oneoff.side_effect = [
+        {"exit_code": 0, "output": "a\nb\nc\n"},
+        {"exit_code": 0, "output": ""},
+    ]
+    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+                       old_string="b", new_string="B")
+    assert "diff" in result
+    assert "-b" in result["diff"]
+    assert "+B" in result["diff"]
+
+
+def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "x\nx\nx\n",
+    }
+    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+                       old_string="x", new_string="y")
+    assert result["status"] == "error"
+    assert "Multiple matches" in result["error"]
+
+
+def test_patch_replace_mode_fuzzy_match(fops, backend):
+    backend.exec_oneoff.side_effect = [
+        {"exit_code": 0, "output": "hello world\n"},
+        {"exit_code": 0, "output": ""},
+    ]
+    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+                       old_string="helo world", new_string="hello world",
+                       replace_all=False)
+    assert result["status"] == "ok"
+    assert result["fuzzy"] is True
+
+
+def test_search_content_returns_matching_lines(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0,
+        "output": "/tmp/x.txt:3:foo bar\n/tmp/y.txt:7:baz foo\n",
+    }
+    result = fops.search("foo", target="dev", search_type="content")
+    assert result["status"] == "ok"
+    assert len(result["results"]) == 2
+    assert result["results"][0]["line"] == 3
+    assert result["results"][0]["path"] == "/tmp/x.txt"
+
+
+def test_search_files_mode_uses_glob(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "/tmp/a.py\n/tmp/b.py\n",
+    }
+    result = fops.search("*.py", target="dev", search_type="files")
+    assert result["status"] == "ok"
+    assert result["results"] == ["/tmp/a.py", "/tmp/b.py"]
+
+
+def test_search_limit_truncates_results(fops, backend):
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "\n".join(f"/tmp/f{i}.py" for i in range(10)) + "\n",
+    }
+    result = fops.search("*.py", target="dev", search_type="files", limit=3)
+    assert len(result["results"]) == 3
+```
+
 - [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+pytest tests/test_file_operations.py -v
+```
+Expected: 5 failed (patch/search not implemented)
 
 - [ ] **Step 3: Implement patch and search**
 
-Implement FileOperations patch/search according to the design spec.
+Append to `file_operations.py`:
+
+```python
+import difflib
+
+
+class FileOperations:
+    # ... read, write, _syntax_check unchanged ...
+
+    def patch(self, mode: str, target: str, path: str = "",
+              old_string: str = "", new_string: str = "",
+              replace_all: bool = False, patch: str = "") -> dict:
+        if mode == "replace":
+            return self._patch_replace(target, path, old_string, new_string, replace_all)
+        if mode == "patch":
+            return self._patch_apply(target, patch)
+        return {"status": "error", "error": f"Unknown patch mode: {mode}"}
+
+    def _patch_replace(self, target: str, path: str,
+                       old_string: str, new_string: str,
+                       replace_all: bool) -> dict:
+        cmd = f"cat {shlex.quote(path)}"
+        result = self._backend.exec_oneoff(target, cmd)
+        if result.get("exit_code") not in (0, None):
+            return {"status": "not_found", "path": path}
+        original = result.get("output", "")
+        count = original.count(old_string)
+        fuzzy = False
+        if count == 0:
+            match = difflib.get_close_matches(
+                old_string, original.splitlines(), n=1, cutoff=0.6
+            )
+            if match:
+                old_string = match[0]
+                count = original.count(old_string)
+                fuzzy = True
+        if count == 0:
+            return {"status": "error",
+                    "error": "old_string not found"}
+        if count > 1 and not replace_all:
+            return {"status": "error",
+                    "error": f"Multiple matches ({count}); set replace_all=true"}
+        replaced = original.replace(old_string, new_string)
+        diff = "\n".join(difflib.unified_diff(
+            original.splitlines(), replaced.splitlines(),
+            fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""
+        ))
+        self._backend.exec_oneoff(target, f"cat > {shlex.quote(path)} <<'__SANDBOX_EOF__'\n{replaced}\n__SANDBOX_EOF__")
+        return {"status": "ok", "path": path, "matches": count,
+                "fuzzy": fuzzy, "diff": diff}
+
+    def _patch_apply(self, target: str, patch_text: str) -> dict:
+        self._backend.exec_oneoff(target,
+                                  f"patch -p0 <<'__SANDBOX_EOF__'\n{patch_text}\n__SANDBOX_EOF__")
+        return {"status": "ok"}
+
+    def search(self, pattern: str, target: str,
+               search_type: str = "content", path: str = ".",
+               file_glob: str = "", limit: int = 50,
+               offset: int = 0, output_mode: str = "content",
+               context: int = 0) -> dict:
+        if search_type == "content":
+            rg = ["rg", "--line-number", f"--max-count={limit}"]
+            if file_glob:
+                rg += ["-g", file_glob]
+            if output_mode != "content":
+                rg += [f"--{output_mode.replace('_', '-')}"]
+            if context:
+                rg += [f"-C {context}"]
+            rg += [shlex.quote(pattern), shlex.quote(path)]
+            cmd = " ".join(rg)
+        elif search_type == "files":
+            cmd = f"find {shlex.quote(path)} -name {shlex.quote(pattern)} -type f"
+        else:
+            return {"status": "error",
+                    "error": f"Unknown search_type: {search_type}"}
+        result = self._backend.exec_oneoff(target, cmd)
+        raw = result.get("output", "")
+        if search_type == "files":
+            results = [r for r in raw.splitlines() if r][offset:offset + limit]
+        else:
+            results = []
+            for line in raw.splitlines():
+                if not line:
+                    continue
+                parts = line.split(":", 2)
+                if len(parts) >= 3:
+                    p, ln, snippet = parts[0], int(parts[1]), parts[2]
+                    results.append({"path": p, "line": ln, "snippet": snippet})
+        return {"status": "ok", "type": search_type,
+                "results": results[offset:offset + limit]}
+```
 
 - [ ] **Step 4: Run tests**
 
@@ -1829,8 +2160,7 @@ SSH_HELP_RESPONSE = {
             "required": {"name": "string", "host": "string", "user": "string", "purpose": "string"},
             "optional": {
                 "port": "int - default 22",
-                "key": "string - private key path",
-                "password": "string",
+                "key": "string - private key path (key auth only)",
             },
             "returns": {"name": "string", "status": "connected", "backend": "ssh"},
             "example": {"name": "remote", "host": "192.168.1.100", "user": "ubuntu", "purpose": "Remote server"},
@@ -2033,7 +2363,6 @@ class SandboxEnv:
             user=params["user"],
             port=params.get("port", 22),
             key=params.get("key"),
-            password=params.get("password"),
         )
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 

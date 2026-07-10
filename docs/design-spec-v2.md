@@ -29,7 +29,7 @@ tools also consume context window space.
 Hermes Gateway (host process)
   └── MCP Client (JSON-RPC over stdio)
         └── Sandbox MCP Server (host process)
-              ├── tools/list (7 tools, ~875 tokens/轮)
+              ├── tools/list (7 tools, ~875 tokens/turn)
               │     ├── Core: sandbox_shell_exec, sandbox_shell_read
               │     ├── Core: sandbox_file_read/write/patch/search
               │     └── Entry: sandbox_env
@@ -116,8 +116,8 @@ SSH docs.
 ### Context cost comparison
 
 ```
-v1: 19 tools × ~150 tokens = ~2850 tokens/轮 (every API call)
-v2: 7 tools × ~125 tokens = ~875 tokens/轮 (every API call)
+v1: 19 tools × ~150 tokens = ~2850 tokens/turn (every API call)
+v2: 7 tools × ~125 tokens = ~875 tokens/turn (every API call)
     + help (200 tokens, once) + docker_help (400 tokens, once) = ~1475 total
 
 Savings: ~50% on every API call, more for agents that don't need all backends.
@@ -476,11 +476,12 @@ SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 - Connection sharing: SSH ControlMaster multiplexing
 - Master socket: `/tmp/sandbox-mcp-ssh-<name>`
 - Shell process: `ssh -o ControlPath=<socket> <user>@<host> bash`
-- ssh_connect: establish ControlMaster connection
+- ssh_connect: establish ControlMaster connection (key auth only)
 - ssh_disconnect: `ssh -S <socket> -O exit <user>@<host>`
 - ssh_reconnect: re-establish ControlMaster (shells are lost on disconnect)
 - ssh_remove: disconnect + unregister from registry
 - No commit/build support (SSH backend only)
+- No password authentication in v1 (key-based auth via `key` parameter)
 
 ## Default Targeting Model
 

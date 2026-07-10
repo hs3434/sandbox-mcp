@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sandbox-mcp"
+version = "0.2.0"
+description = "Sandbox Environment Manager MCP server"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "Sandbox MCP Contributors"}]
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+sandbox-mcp = "server:main"
+
+[tool.setuptools]
+py-modules = ["server", "target_registry", "shell_registry", "shell_session", "sandbox_env", "file_operations"]
+packages = ["backends"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+disallow_untyped_defs = false
