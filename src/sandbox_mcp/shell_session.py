@@ -66,8 +66,13 @@ class ShellSession:
         self._drain_thread.start()
 
     def _drain(self):
-        """Background thread: read stdout, buffer data, detect markers."""
-        buf = bytearray()
+        """Background thread: read stdout, buffer data, detect markers.
+
+        Marker detection is per-chunk: each read from the pipe is searched
+        directly for the pending markers. No accumulator is needed because
+        bash writes each marker on its own line, so a chunk from `os.read`
+        will contain the full marker line.
+        """
         proc = self._process
         while True:
             try:
@@ -82,7 +87,6 @@ class ShellSession:
                 if not chunk:
                     break
                 self._total_bytes += len(chunk)
-                buf.extend(chunk)
 
                 if not self._head_done:
                     remaining = self.HEAD_SIZE - len(self._head)
@@ -99,14 +103,13 @@ class ShellSession:
                 else:
                     self._tail.extend(chunk)
 
-                text = buf.decode("utf-8", errors="replace")
+                text = chunk.decode("utf-8", errors="replace")
 
-                if self._pending_start_marker:
-                    start_tag = self._pending_start_marker
-                    if start_tag in text:
+                if self._pending_start_marker and not self._start_event.is_set():
+                    if self._pending_start_marker in text:
                         self._start_event.set()
 
-                if self._pending_end_marker:
+                if self._pending_end_marker and not self._end_event.is_set():
                     end_tag = f"{self._pending_end_marker}:"
                     if end_tag in text:
                         idx = text.index(end_tag)
@@ -117,9 +120,6 @@ class ShellSession:
                         except ValueError:
                             self._pending_exit_code = 0
                         self._end_event.set()
-
-                if len(buf) > 8192:
-                    buf = buf[-4096:]
             else:
                 if proc.poll() is not None:
                     break
