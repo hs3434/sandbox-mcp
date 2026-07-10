@@ -21,8 +21,12 @@ def test_send_wait_true_preserves_state():
 
 
 def test_send_wait_true_exit_code():
+    """exit code is captured when bash can run the end echo."""
     session = ShellSession(["bash"])
     result = session.send("exit 42", wait=True, timeout=5)
+    # bash itself exits before echoing __END_; the drain then sees EOF.
+    # The state machine reports 'terminated' and exit_code=None in that
+    # case. We accept either here so the test documents the behaviour.
     assert result["status"] in ("completed", "terminated")
     session.close()
 
@@ -57,13 +61,13 @@ def test_read_after_wait_false():
     session.send("echo hello; sleep 0.3; echo done", wait=False, timeout=3)
     time.sleep(1.0)
     found_completed = False
-    for _ in range(10):
+    for _ in range(20):
         result = session.read()
         if result["status"] == "completed":
             found_completed = True
             assert result["exit_code"] == 0
             break
-        time.sleep(0.2)
+        time.sleep(0.1)
     assert found_completed, "Should detect completion via __END_ marker"
     session.close()
 
@@ -99,3 +103,13 @@ def test_output_truncation():
     assert "truncated" in result["output"].lower()
     assert "100000" in result["output"]
     session.close()
+
+
+def test_close_joins_drain_thread():
+    """close() must release the drain thread so it doesn't leak FDs."""
+    session = ShellSession(["bash"])
+    thread = session._drain_thread
+    assert thread is not None
+    assert thread.is_alive()
+    session.close()
+    assert not thread.is_alive()

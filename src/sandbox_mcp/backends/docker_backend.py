@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -11,24 +12,35 @@ from sandbox_mcp.backends.base import Backend, TargetInfo
 from sandbox_mcp.shell_session import ShellSession
 
 
-def _run(cmd, timeout=30, check=False):
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
+def _run(cmd, timeout=30):
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return _TimeoutResult()
 
 
-def _docker() -> str:
-    import shutil
-    p = shutil.which("docker")
-    if not p:
-        raise RuntimeError("docker not found on PATH")
-    return p
+class _TimeoutResult:
+    """Stand-in for CompletedProcess when subprocess.run times out."""
+    returncode = -1
+    stdout = ""
+    stderr = "timeout"
 
 
 class DockerBackend(Backend):
     """Docker backend: run, stop, start, remove, commit, build, open_shell, exec_oneoff."""
 
     def __init__(self):
-        self._docker = _docker()
+        self._docker_path: str | None = None
         self._started_at: dict[str, float] = {}
+
+    def _docker(self) -> str:
+        if self._docker_path is None:
+            p = shutil.which("docker")
+            if not p:
+                raise RuntimeError("docker not found on PATH")
+            self._docker_path = p
+        return self._docker_path
 
     # ---- lifecycle ----
 
@@ -40,7 +52,7 @@ class DockerBackend(Backend):
         workdir = kwargs.get("workdir", "/workspace")
 
         container = f"sandbox-{name}"
-        cmd = [self._docker, "run", "-d", "--name", container,
+        cmd = [self._docker(), "run", "-d", "--name", container,
                "--init", "--restart", "on-failure:3",
                "-w", workdir]
         for v in volumes:
@@ -61,27 +73,36 @@ class DockerBackend(Backend):
 
     def start(self, name: str) -> TargetInfo:
         container = f"sandbox-{name}"
-        result = _run([self._docker, "start", container], timeout=30)
+        result = _run([self._docker(), "start", container], timeout=30)
         if result.returncode != 0:
-            return TargetInfo(name=name, backend="docker", status="error")
+            return TargetInfo(name=name, backend="docker", status="error",
+                              error=result.stderr.strip() or "docker start failed")
         self._started_at[name] = self._started_at.get(name, time.time())
         return TargetInfo(name=name, backend="docker", status="running")
 
     def stop(self, name: str) -> TargetInfo:
         container = f"sandbox-{name}"
-        _run([self._docker, "stop", container], timeout=30)
+        result = _run([self._docker(), "stop", container], timeout=30)
+        if result.returncode != 0:
+            return TargetInfo(name=name, backend="docker", status="error",
+                              error=result.stderr.strip() or "docker stop failed")
         return TargetInfo(name=name, backend="docker", status="stopped")
 
     def remove(self, name: str) -> dict:
         container = f"sandbox-{name}"
-        _run([self._docker, "rm", "-f", container], timeout=30)
+        result = _run([self._docker(), "rm", "-f", container], timeout=30)
+        if result.returncode != 0:
+            return {"target": name, "status": "error",
+                    "error": result.stderr.strip() or "docker rm failed"}
         self._started_at.pop(name, None)
         return {"target": name, "status": "removed"}
 
     def get_info(self, name: str) -> TargetInfo:
         container = f"sandbox-{name}"
-        result = _run([self._docker, "inspect", "--format",
+        result = _run([self._docker(), "inspect", "--format",
                        "{{.State.Running}}", container], timeout=10)
+        if result.returncode != 0:
+            return TargetInfo(name=name, backend="docker", status="error")
         running = result.stdout.strip() == "true"
         return TargetInfo(
             name=name, backend="docker",
@@ -93,7 +114,7 @@ class DockerBackend(Backend):
     def commit(self, name: str, image_tag: str | None = None) -> dict:
         container = f"sandbox-{name}"
         tag = image_tag or f"sandbox-{name}-{int(time.time())}"
-        result = _run([self._docker, "commit", container, tag], timeout=120)
+        result = _run([self._docker(), "commit", container, tag], timeout=120)
         if result.returncode != 0:
             return {"error": result.stderr.strip() or "commit failed"}
         return {"image_tag": tag, "status": "committed"}
@@ -106,7 +127,7 @@ class DockerBackend(Backend):
             df_path = Path(ctx) / df_path
         if not df_path.exists():
             return {"error": f"Dockerfile not found: {df_path}"}
-        result = _run([self._docker, "build", "-t", image_tag,
+        result = _run([self._docker(), "build", "-t", image_tag,
                        "-f", str(df_path), ctx], timeout=600)
         if result.returncode != 0:
             return {"error": result.stderr.strip() or "build failed",
@@ -117,13 +138,12 @@ class DockerBackend(Backend):
 
     def open_shell(self, name: str) -> ShellSession:
         container = f"sandbox-{name}"
-        # bash is the persistent shell; use `exec` to avoid extra wrapping process
-        return ShellSession(["docker", "exec", "-i", container, "bash"])
+        return ShellSession([self._docker(), "exec", "-i", container, "bash"])
 
     def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
         container = f"sandbox-{name}"
         result = _run(
-            ["docker", "exec", container, "bash", "-c", command],
+            [self._docker(), "exec", container, "bash", "-c", command],
             timeout=timeout,
         )
         return {
@@ -142,7 +162,7 @@ class DockerBackend(Backend):
             f"grep -i {shlex.quote(basename)} | head -5"
         )
         result = _run(
-            ["docker", "exec", container, "bash", "-c", ls_cmd],
+            [self._docker(), "exec", container, "bash", "-c", ls_cmd],
             timeout=10,
         )
         if result.returncode != 0:

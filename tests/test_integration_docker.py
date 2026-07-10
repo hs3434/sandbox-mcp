@@ -5,10 +5,13 @@ import pytest
 
 from sandbox_mcp.server import SandboxServer
 
-pytestmark = pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason="Docker not available",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not shutil.which("docker"),
+        reason="Docker not available",
+    ),
+]
 
 
 @pytest.fixture

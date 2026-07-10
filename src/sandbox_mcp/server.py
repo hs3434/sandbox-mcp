@@ -212,18 +212,18 @@ class SandboxServer:
     # ---- shell handlers ----
 
     def _handle_sandbox_shell_exec(self, args):
-        target = self._resolve_target(args)
-        backend = self.targets.get_backend(target)
-        shell_id = args.get("shell_id")
         timeout = args.get("timeout", 30)
         wait = args.get("wait", True)
         max_output = args.get("max_output", 50000)
+        shell_id = args.get("shell_id")
 
         if shell_id:
             session = self.shells.get(shell_id)
             if session is None:
                 return {"error": f"Unknown shell_id: {shell_id}"}
         else:
+            target = self._resolve_target(args)
+            backend = self.targets.get_backend(target)
             sid = self.shells.get_or_create_default(
                 target, lambda: backend.open_shell(target))
             session = self.shells.get(sid)

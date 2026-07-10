@@ -41,7 +41,6 @@ class ShellSession:
         self._head = bytearray()
         self._tail = deque(maxlen=self.TAIL_SIZE)
         self._head_done = False
-        self._total_bytes = 0
 
         # Marker tracking
         self._pending_start_marker = None
@@ -68,12 +67,14 @@ class ShellSession:
     def _drain(self):
         """Background thread: read stdout, buffer data, detect markers.
 
-        Marker detection is per-chunk: each read from the pipe is searched
-        directly for the pending markers. No accumulator is needed because
-        bash writes each marker on its own line, so a chunk from `os.read`
-        will contain the full marker line.
+        `os.read()` does not preserve message boundaries; a marker line can
+        straddle two reads. We therefore keep a small `_marker_buf` that
+        is reset on every successful `__END_` detection. The user-visible
+        output buffer (`_head` + `_tail`) is independent of this and
+        populated from the same chunks.
         """
         proc = self._process
+        marker_buf = bytearray()
         while True:
             try:
                 ready, _, _ = select.select([proc.stdout], [], [], 0.1)
@@ -86,7 +87,6 @@ class ShellSession:
                     break
                 if not chunk:
                     break
-                self._total_bytes += len(chunk)
 
                 if not self._head_done:
                     remaining = self.HEAD_SIZE - len(self._head)
@@ -103,11 +103,15 @@ class ShellSession:
                 else:
                     self._tail.extend(chunk)
 
-                text = chunk.decode("utf-8", errors="replace")
+                marker_buf.extend(chunk)
+                if len(marker_buf) > 8192:
+                    marker_buf = marker_buf[-4096:]
+                text = marker_buf.decode("utf-8", errors="replace")
 
-                if self._pending_start_marker and not self._start_event.is_set():
-                    if self._pending_start_marker in text:
-                        self._start_event.set()
+                if (self._pending_start_marker
+                        and not self._start_event.is_set()
+                        and self._pending_start_marker in text):
+                    self._start_event.set()
 
                 if self._pending_end_marker and not self._end_event.is_set():
                     end_tag = f"{self._pending_end_marker}:"
@@ -120,6 +124,7 @@ class ShellSession:
                         except ValueError:
                             self._pending_exit_code = 0
                         self._end_event.set()
+                        marker_buf = bytearray()  # reset for next send
             else:
                 if proc.poll() is not None:
                     break
@@ -158,7 +163,6 @@ class ShellSession:
             self._head = bytearray()
             self._tail = deque(maxlen=self.TAIL_SIZE)
             self._head_done = False
-            self._total_bytes = 0
             self._last_command = command
 
             if wait:
@@ -259,6 +263,9 @@ class ShellSession:
             self._process = None
         self._start_event.set()
         self._end_event.set()
+        if self._drain_thread:
+            self._drain_thread.join(timeout=2)
+            self._drain_thread = None
 
     @property
     def state(self):

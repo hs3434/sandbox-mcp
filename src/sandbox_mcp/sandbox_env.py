@@ -201,8 +201,8 @@ class SandboxEnv:
     def _require(self, params, *keys):
         missing = [k for k in keys if k not in params]
         if missing:
-            return None, f"Missing required params: {', '.join(missing)}"
-        return True, None
+            return f"Missing required params: {', '.join(missing)}"
+        return None
 
     def _op_default_set(self, params):
         has_target = "target" in params
@@ -241,8 +241,8 @@ class SandboxEnv:
     # ---- docker ----
 
     def _op_docker_run(self, params):
-        ok, err = self._require(params, "name", "image", "purpose")
-        if err:
+        err = self._require(params, "name", "image", "purpose")
+        if err is not None:
             return {"error": err}
         info = self._targets.register(
             params["name"], self._docker,
@@ -256,15 +256,15 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "docker"}
 
     def _op_docker_build(self, params):
-        ok, err = self._require(params, "image_tag", "dockerfile")
-        if err:
+        err = self._require(params, "image_tag", "dockerfile")
+        if err is not None:
             return {"error": err}
         return self._docker.build(params["image_tag"], params["dockerfile"],
                                   params.get("context_dir"))
 
     def _op_docker_commit(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -274,8 +274,8 @@ class SandboxEnv:
         return backend.commit(target, params.get("image_tag"))
 
     def _op_docker_stop(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -287,8 +287,8 @@ class SandboxEnv:
         return {"target": target, "status": info.status}
 
     def _op_docker_start(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -299,8 +299,8 @@ class SandboxEnv:
         return {"target": target, "status": info.status}
 
     def _op_docker_remove(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -315,8 +315,8 @@ class SandboxEnv:
     # ---- ssh ----
 
     def _op_ssh_connect(self, params):
-        ok, err = self._require(params, "name", "host", "user", "purpose")
-        if err:
+        err = self._require(params, "name", "host", "user", "purpose")
+        if err is not None:
             return {"error": err}
         info = self._targets.register(
             params["name"], self._ssh,
@@ -329,8 +329,8 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 
     def _op_ssh_disconnect(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -342,8 +342,8 @@ class SandboxEnv:
         return {"target": target, "status": info.status}
 
     def _op_ssh_reconnect(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
@@ -354,8 +354,8 @@ class SandboxEnv:
         return {"target": target, "status": info.status}
 
     def _op_ssh_remove(self, params):
-        ok, err = self._require(params, "target")
-        if err:
+        err = self._require(params, "target")
+        if err is not None:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)

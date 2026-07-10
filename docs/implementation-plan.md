@@ -82,7 +82,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
     "ruff>=0.6.0",
     "mypy>=1.10.0",
 ]
@@ -90,28 +89,27 @@ dev = [
 [project.scripts]
 sandbox-mcp = "sandbox_mcp.server:main"
 
-[tool.setuptools]
 [tool.setuptools.packages.find]
 where = ["src"]
-packages = ["backends"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-asyncio_mode = "auto"
+markers = ["integration: requires Docker daemon to run"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "B", "UP"]
+select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = false
 warn_unused_ignores = true
 disallow_untyped_defs = false
+ignore_missing_imports = true
 ```
 
 - [ ] **Step 2: Create package init files**

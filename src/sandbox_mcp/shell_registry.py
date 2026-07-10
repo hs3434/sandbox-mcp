@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from collections.abc import Callable
 
@@ -37,10 +38,8 @@ class ShellRegistry:
         entry = self._shells.pop(shell_id, None)
         if not entry:
             return False
-        try:
+        with contextlib.suppress(Exception):
             entry["session"].close()
-        except Exception:
-            pass
         target = entry["target"]
         if self._default_shells.get(target) == shell_id:
             del self._default_shells[target]

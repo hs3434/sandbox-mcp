@@ -14,6 +14,7 @@ class TargetInfo:
     purpose: str = ""
     shells: int = 0
     uptime: str = ""
+    error: str = ""
 
 
 class Backend(ABC):

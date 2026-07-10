@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import difflib
 import shlex
+import uuid
 
 _LINE_FMT = "{n}|{line}"
+
+
+def _unique_heredoc_tag() -> str:
+    """Return a heredoc delimiter that cannot appear in arbitrary content."""
+    return f"__SANDBOX_EOF_{uuid.uuid4().hex}__"
 
 
 class FileOperations:
@@ -37,15 +44,25 @@ class FileOperations:
                 "output": "\n".join(numbered) + ("\n" if numbered else "")}
 
     def write(self, path: str, content: str, target: str) -> dict:
-        self._backend.exec_oneoff(
-            target, f"mkdir -p $(dirname {shlex.quote(path)})")
-        heredoc = "__SANDBOX_EOF__"
-        cmd = (f"cat > {shlex.quote(path)} <<'{heredoc}'\n"
-               f"{content}\n{heredoc}")
-        self._backend.exec_oneoff(target, cmd)
+        # Always encode via base64 to avoid heredoc EOF collisions and shell
+        # interpretation of special characters in arbitrary user content.
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        mkdir = f"mkdir -p $(dirname {shlex.quote(path)})"
+        r = self._backend.exec_oneoff(target, mkdir)
+        if r.get("exit_code") not in (0, None):
+            return {"status": "error", "path": path, "stage": "mkdir",
+                    "error": r.get("stderr") or "mkdir failed"}
+        cmd = (f"echo {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}")
+        r = self._backend.exec_oneoff(target, cmd)
+        if r.get("exit_code") not in (0, None):
+            return {"status": "error", "path": path, "stage": "write",
+                    "error": r.get("stderr") or "write failed"}
         check = self._syntax_check(path)
         if check is not None:
-            self._backend.exec_oneoff(target, check)
+            r = self._backend.exec_oneoff(target, check)
+            if r.get("exit_code") not in (0, None):
+                return {"status": "error", "path": path, "stage": "syntax_check",
+                        "error": r.get("stderr") or "syntax check failed"}
         return {"status": "ok", "path": path}
 
     def _syntax_check(self, path: str) -> str | None:
@@ -78,7 +95,9 @@ class FileOperations:
         original = result.get("output", "") or ""
         count = original.count(old_string)
         fuzzy = False
-        if count == 0:
+        if count == 0 and "\n" not in old_string:
+            # Only fuzzy-match single-line edits to avoid line-by-line
+            # comparison failures on multi-line blocks.
             match = difflib.get_close_matches(
                 old_string, original.splitlines(), n=1, cutoff=0.6)
             if match:
@@ -94,20 +113,22 @@ class FileOperations:
         diff = "\n".join(difflib.unified_diff(
             original.splitlines(), replaced.splitlines(),
             fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""))
-        heredoc = "__SANDBOX_EOF__"
+        encoded = base64.b64encode(replaced.encode("utf-8")).decode("ascii")
         self._backend.exec_oneoff(
-            target, f"cat > {shlex.quote(path)} <<'{heredoc}'\n{replaced}\n{heredoc}")
+            target,
+            f"echo {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}")
         return {"status": "ok", "path": path, "matches": count,
                 "fuzzy": fuzzy, "diff": diff}
 
     def _patch_apply(self, target: str, patch_text: str) -> dict:
         if not patch_text.strip():
             return {"status": "error", "error": "patch is empty"}
-        heredoc = "__SANDBOX_EOF__"
+        encoded = base64.b64encode(patch_text.encode("utf-8")).decode("ascii")
         result = self._backend.exec_oneoff(
-            target, f"patch -p0 <<'{heredoc}'\n{patch_text}\n{heredoc}")
+            target, f"echo {shlex.quote(encoded)} | base64 -d | patch -p0")
         if result.get("exit_code") not in (0, None):
-            return {"status": "error", "error": result.get("stderr") or "patch failed"}
+            return {"status": "error",
+                    "error": result.get("stderr") or "patch failed"}
         return {"status": "ok"}
 
     # ---- search ----
@@ -128,7 +149,9 @@ class FileOperations:
             rg += [shlex.quote(pattern), shlex.quote(path)]
             cmd = " ".join(rg)
         elif search_type == "files":
-            cmd = f"find {shlex.quote(path)} -name {shlex.quote(pattern)} -type f"
+            # Do not shlex.quote the pattern: it is a glob (e.g. *.py),
+            # not a literal filename.
+            cmd = f"find {shlex.quote(path)} -name {pattern} -type f"
         else:
             return {"status": "error",
                     "error": f"Unknown search_type: {search_type}"}

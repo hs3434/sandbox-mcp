@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+import tempfile
 import time
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
@@ -25,10 +27,17 @@ class SSHBackend(Backend):
         self._targets: dict[str, dict] = {}
 
     def _socket_path(self, name):
-        return f"/tmp/sandbox-mcp-ssh-{name}"
+        target = self._targets.get(name)
+        if target is not None and "socket" in target:
+            return target["socket"]
+        # Per-target socket directory; predictable name but isolated.
+        d = tempfile.mkdtemp(prefix=f"sandbox-mcp-ssh-{name}-")
+        return f"{d}/control"
 
     def _ssh_base_args(self, name):
-        target = self._targets.get(name, {})
+        target = self._targets.get(name)
+        if target is None:
+            raise RuntimeError(f"Unknown SSH target: {name}")
         socket = self._socket_path(name)
         args = [self._ssh, "-o", f"ControlPath={socket}",
                 "-o", "StrictHostKeyChecking=no",
@@ -49,14 +58,6 @@ class SSHBackend(Backend):
         port = kwargs.get("port", 22)
         key = kwargs.get("key")
 
-        self._targets[name] = {
-            "host": host, "user": user, "port": port,
-            "key": key,
-            "socket": self._socket_path(name),
-            "purpose": purpose,
-            "started_at": time.time(),
-        }
-
         cmd = [self._ssh, "-M", "-S", self._socket_path(name),
                "-o", "ControlPersist=300",
                "-o", "StrictHostKeyChecking=no",
@@ -75,6 +76,13 @@ class SSHBackend(Backend):
         if result.returncode != 0:
             return TargetInfo(name=name, backend="ssh", status="error",
                               purpose=purpose)
+        self._targets[name] = {
+            "host": host, "user": user, "port": port,
+            "key": key,
+            "socket": self._socket_path(name),
+            "purpose": purpose,
+            "started_at": time.time(),
+        }
         return TargetInfo(name=name, backend="ssh", status="running",
                           purpose=purpose)
 
@@ -86,25 +94,28 @@ class SSHBackend(Backend):
 
     def stop(self, name):
         """Close the SSH master connection."""
+        if name not in self._targets:
+            return TargetInfo(name=name, backend="ssh", status="error")
         socket = self._socket_path(name)
         target = self._targets.get(name, {})
         user = target.get("user", "")
         host = target.get("host", "")
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [self._ssh, "-S", socket, "-O", "exit", f"{user}@{host}"],
-                capture_output=True, timeout=10,
+                capture_output=True, text=True, timeout=10,
             )
-        except Exception:
-            pass
+        except subprocess.TimeoutExpired:
+            return TargetInfo(name=name, backend="ssh", status="error")
+        if result.returncode != 0:
+            return TargetInfo(name=name, backend="ssh", status="error",
+                              error=result.stderr.strip() or "ssh exit failed")
         return TargetInfo(name=name, backend="ssh", status="stopped")
 
     def remove(self, name):
         if name in self._targets:
-            try:
+            with contextlib.suppress(Exception):
                 self.stop(name)
-            except Exception:
-                pass
             self._targets.pop(name, None)
         return {"target": name, "status": "removed"}
 
@@ -114,7 +125,7 @@ class SSHBackend(Backend):
             return TargetInfo(name=name, backend="ssh", status="error")
         try:
             result = subprocess.run(
-                self._ssh_base_args(name) + ["true"],
+                [*self._ssh_base_args(name), "true"],
                 capture_output=True, text=True, timeout=10,
             )
             status = "running" if result.returncode == 0 else "error"
@@ -124,12 +135,12 @@ class SSHBackend(Backend):
                           purpose=target.get("purpose", ""))
 
     def open_shell(self, name):
-        return ShellSession(self._ssh_base_args(name) + ["bash"])
+        return ShellSession([*self._ssh_base_args(name), "bash"])
 
     def exec_oneoff(self, name, command, timeout=30):
         try:
             result = subprocess.run(
-                self._ssh_base_args(name) + ["bash", "-c", command],
+                [*self._ssh_base_args(name), "bash", "-c", command],
                 capture_output=True, text=True, timeout=timeout,
             )
             return {"exit_code": result.returncode,

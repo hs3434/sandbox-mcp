@@ -235,17 +235,21 @@ process's stdout pipe.
 command producing >64KB output with no shell_read calls would block on write(),
 causing deadlock.
 
-**Buffer strategy: head 5KB + tail ring buffer**
+**Buffer strategy: head 5KB + tail ring buffer (in-memory) + tail-only output on read**
 
 ```
-drain thread ring buffer:
-├── head: first 5KB (fixed, never discarded - gives command context)
-├── tail: last ~45KB (ring buffer, old data discarded as new arrives)
+drain thread ring buffer (in-memory, never read by shell_read):
+├── head: first 5KB (fixed)
+├── tail: last ~45KB ring buffer (old data discarded as new arrives)
 └── total memory per shell: ~50KB
-
-When output exceeds 50KB:
-  head_5KB + "\n[...truncated...]\n" + tail_45KB
 ```
+
+When `shell_read` returns output larger than `max_output` (default 50KB),
+the implementation returns the **tail** (last `max_output` bytes) with a
+truncation notice, not head+notice+tail. This is because command output
+endings (errors, final results) are usually more useful than the opening.
+The head buffer is kept in memory in case future revisions want to switch
+to a head+tail scheme.
 
 **Marker detection:** drain thread scans for __START_ and __END_ markers:
 - __START_ found: signal shell_exec(wait=false) to return confirmed=true
