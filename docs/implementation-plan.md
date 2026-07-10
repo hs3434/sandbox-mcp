@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an MCP server with 8 exposed tools (7 core + 1 envtools entry) that manages Docker containers and SSH machines as persistent execution targets, with shell-based command execution and full file operation capabilities.
+**Goal:** Build an MCP server with 7 exposed tools (6 core + 1 sandbox_env entry) that manages Docker containers and SSH machines as persistent execution targets, with shell-based command execution and full file operation capabilities.
 
-**Architecture:** Stateful MCP server (stdio JSON-RPC). Three-layer tool exposure: core tools always in tools/list (~1000 tokens), envtools for lazy discovery of 15 management actions. ShellSession uses dual-marker mechanism with background drain thread.
+**Architecture:** Stateful MCP server (stdio JSON-RPC). Three-layer tool exposure: core tools always in tools/list (~875 tokens), sandbox_env for progressive discovery of 18 management actions. ShellSession uses dual-marker mechanism with background drain thread.
 
 **Tech Stack:** Python 3.12+, `mcp` Python SDK, `docker` CLI via subprocess, system `ssh` with ControlMaster, pytest
 
@@ -21,7 +21,7 @@ sandbox-mcp/
 ├── target_registry.py          # Target management (name -> backend)
 ├── shell_registry.py           # Shell session management (shell_id -> ShellSession)
 ├── shell_session.py            # ShellSession: drain thread, dual markers, state machine
-├── envtools.py                 # envtools action dispatch + help generation
+├── sandbox_env.py             # sandbox_env action dispatch + help generation
 ├── file_operations.py          # File ops: read/write/patch/search via shell
 ├── backends/
 │   ├── __init__.py
@@ -36,10 +36,9 @@ sandbox-mcp/
 │   ├── test_target_registry.py
 │   ├── test_shell_registry.py
 │   ├── test_file_operations.py
-│   ├── test_envtools.py
+│   ├── test_sandbox_env.py
 │   └── test_server.py
 └── docs/
-    ├── design-spec.md          # v1 design (superseded)
     ├── design-spec-v2.md       # current design
     └── implementation-plan.md  # this file
 ```
@@ -59,7 +58,7 @@ sandbox-mcp/
 ```toml
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "sandbox-mcp"
@@ -77,7 +76,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 sandbox-mcp = "server:main"
 
 [tool.setuptools]
-py-modules = ["server", "target_registry", "shell_registry", "shell_session", "envtools", "file_operations"]
+py-modules = ["server", "target_registry", "shell_registry", "shell_session", "sandbox_env", "file_operations"]
 packages = ["backends"]
 ```
 
@@ -106,7 +105,7 @@ def tmp_workdir(tmp_path, monkeypatch):
 - [ ] **Step 4: Install package in dev mode and verify**
 
 ```bash
-cd /work/run/projects/bio-24/my_projects/sandbox-mcp
+cd /work/sandbox-mcp
 pip install -e ".[dev]"
 python -c "import server; print('import OK')"
 ```
@@ -130,7 +129,7 @@ ShellSession wraps a persistent bash process with:
 - **Dual marker mechanism**: `__START_<uuid>__` confirms execution, `__END_<uuid>__:$?` captures exit code
 - **Background drain thread**: continuously reads stdout, buffers output (head 5KB + tail ~45KB ring buffer), detects markers
 - **State machine**: idle -> busy -> idle (wait=true), idle -> running -> idle (wait=false + shell_read), any -> terminated (bash dies)
-- **send(command, wait, timeout)**: replaces v1's exec + shell_write
+- **send(command, wait, timeout)**: replaces separate exec + shell_write semantics
 - **read()**: non-blocking read from in-memory buffer, detects completion via markers
 - **close()**: kill process, cleanup
 - **I/O**: stderr merged into stdout (matches terminal behavior)
@@ -411,7 +410,7 @@ class ShellSession:
             if self._state in ("busy", "running"):
                 return {"output": "", "exit_code": None, "status": "error",
                         "error": "Shell is busy (previous command still running). "
-                                 "Use shell_read to check or shell_close to kill."}
+                                 "Use shell_read to check or shell_remove to kill."}
 
             marker = uuid.uuid4().hex
             start_marker = f"__START_{marker}__"
@@ -1168,7 +1167,7 @@ git commit -m "feat: SSHBackend with ControlMaster multiplexing"
 - Create: `target_registry.py`
 - Test: `tests/test_target_registry.py`
 
-Same as v1. Manages name -> backend mapping, active target, hybrid targeting model.
+Manages name -> backend mapping, target metadata, default target, and explicit target overrides.
 
 - [ ] **Step 1: Write failing test**
 
@@ -1189,15 +1188,15 @@ def test_register_target():
     assert "dev" in reg.list_targets()
 
 
-def test_set_active_target():
+def test_set_default_target():
     reg = TargetRegistry()
     backend = MagicMock()
     backend.create.return_value = MagicMock(name="dev", backend="docker",
                                              status="running", purpose="test",
                                              shells=0, uptime="")
     reg.register("dev", backend, purpose="test", image="python:3.12")
-    reg.set_active("dev")
-    assert reg.get_active() == "dev"
+    reg.set_default("dev")
+    assert reg.get_default() == "dev"
 
 
 def test_resolve_target_explicit():
@@ -1208,9 +1207,9 @@ def test_resolve_target_explicit():
                                              shells=0, uptime="")
     reg.register("dev", backend, purpose="", image="python:3.12")
     reg.register("db", backend, purpose="", image="postgres:16")
-    reg.set_active("dev")
+    reg.set_default("dev")
     assert reg.resolve_target("db") == "db"
-    assert reg.get_active() == "dev"
+    assert reg.get_default() == "dev"
 
 
 def test_resolve_target_default():
@@ -1220,13 +1219,13 @@ def test_resolve_target_default():
                                              status="running", purpose="",
                                              shells=0, uptime="")
     reg.register("dev", backend, purpose="", image="python:3.12")
-    reg.set_active("dev")
+    reg.set_default("dev")
     assert reg.resolve_target(None) == "dev"
 
 
-def test_resolve_target_no_active():
+def test_resolve_target_no_default():
     reg = TargetRegistry()
-    with pytest.raises(ValueError, match="No active target"):
+    with pytest.raises(ValueError, match="No default target"):
         reg.resolve_target(None)
 
 
@@ -1237,10 +1236,10 @@ def test_unregister_target():
                                              status="running", purpose="",
                                              shells=0, uptime="")
     reg.register("dev", backend, purpose="", image="python:3.12")
-    reg.set_active("dev")
+    reg.set_default("dev")
     reg.unregister("dev")
     assert "dev" not in reg.list_targets()
-    assert reg.get_active() is None
+    assert reg.get_default() is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1251,8 +1250,7 @@ pytest tests/test_target_registry.py -v
 
 - [ ] **Step 3: Implement TargetRegistry**
 
-(Same implementation as v1 - see design-spec-v2.md for interface. The registry
-manages name -> {backend, info, created_at} and the active target.)
+Implement TargetRegistry with name -> {backend, info, created_at} storage and a default target used by `resolve_target(None)`.
 
 - [ ] **Step 4: Run tests**
 
@@ -1265,7 +1263,7 @@ Expected: 6 passed
 
 ```bash
 git add target_registry.py tests/test_target_registry.py
-git commit -m "feat: TargetRegistry with hybrid targeting model"
+git commit -m "feat: TargetRegistry with default targeting model"
 ```
 
 ---
@@ -1276,7 +1274,7 @@ git commit -m "feat: TargetRegistry with hybrid targeting model"
 - Create: `shell_registry.py`
 - Test: `tests/test_shell_registry.py`
 
-Same as v1, but with `terminated` state handling and cleanup hints in list output.
+Tracks shell sessions, per-target default shells, terminated state handling, and cleanup hints in list output.
 
 - [ ] **Step 1: Write failing test**
 
@@ -1341,8 +1339,22 @@ def test_get_or_create_default():
     mock_shell = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
     shell_id = reg.get_or_create_default("dev", lambda: mock_shell)
     assert shell_id.startswith("sh_")
+    assert reg.get_default_id("dev") == shell_id
     shell_id2 = reg.get_or_create_default("dev", lambda: MagicMock())
     assert shell_id == shell_id2
+
+
+def test_set_default_shell():
+    reg = ShellRegistry()
+    shell1 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
+    shell2 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
+    target = reg.set_default(shell2)
+    assert target == "dev"
+    assert reg.get_target(shell2) == "dev"
+    assert reg.get_default_id("dev") == shell2
+    shells = reg.list_shells(target="dev")
+    assert next(s for s in shells if s["shell_id"] == shell1)["is_default"] is False
+    assert next(s for s in shells if s["shell_id"] == shell2)["is_default"] is True
 
 
 def test_close_all_for_target():
@@ -1416,6 +1428,18 @@ class ShellRegistry:
         self._default_shells[target] = shell_id
         return shell_id
 
+    def get_target(self, shell_id: str) -> Optional[str]:
+        entry = self._shells.get(shell_id)
+        return entry["target"] if entry else None
+
+    def set_default(self, shell_id: str) -> str:
+        entry = self._shells.get(shell_id)
+        if entry is None:
+            raise ValueError(f"Unknown shell_id: {shell_id}")
+        target = entry["target"]
+        self._default_shells[target] = shell_id
+        return target
+
     def get_default_id(self, target: str) -> Optional[str]:
         return self._default_shells.get(target)
 
@@ -1432,9 +1456,10 @@ class ShellRegistry:
                 "status": session.state,
                 "uptime": f"{int(session.uptime)}s",
                 "last_command": session.last_command,
+                "is_default": self._default_shells.get(entry["target"]) == shell_id,
             }
             if session.state == "terminated":
-                item["hint"] = "Process exited. Call shell_close to clean up."
+                item["hint"] = "Process exited. Call shell_remove to clean up."
             result.append(item)
         return result
 
@@ -1452,7 +1477,7 @@ class ShellRegistry:
 ```bash
 pytest tests/test_shell_registry.py -v
 ```
-Expected: 7 passed
+Expected: 8 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1469,18 +1494,17 @@ git commit -m "feat: ShellRegistry with terminated hints and default shell track
 - Create: `file_operations.py`
 - Test: `tests/test_file_operations.py`
 
-Same as v1. File operations execute shell commands on targets via backend.
+File operations execute shell commands on targets via backend.
 
 - [ ] **Step 1: Write failing tests**
 
-(Same tests as v1 implementation plan, testing read_file with line numbers,
-pagination, not-found suggestions, and write_file with auto-mkdir and syntax check.)
+Write tests for read_file with line numbers, pagination, not-found suggestions, and write_file with auto-mkdir and syntax check.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 - [ ] **Step 3: Implement FileOperations (read + write)**
 
-(Same implementation as v1, using `_exec` via `backend.exec_oneoff`.)
+Implement FileOperations read/write using `_exec` via `backend.exec_oneoff`.
 
 - [ ] **Step 4: Run tests**
 
@@ -1504,7 +1528,7 @@ git commit -m "feat: FileOperations read + write with line numbers, binary detec
 - Modify: `file_operations.py` (add patch + search)
 - Modify: `tests/test_file_operations.py` (add tests)
 
-Same as v1. Patch uses fuzzy matching (replace mode) or V4A format (patch mode).
+Patch uses fuzzy matching (replace mode) or V4A format (patch mode).
 Search uses ripgrep for content, find for files.
 
 - [ ] **Step 1: Write failing tests for patch and search**
@@ -1513,7 +1537,7 @@ Search uses ripgrep for content, find for files.
 
 - [ ] **Step 3: Implement patch and search**
 
-(Same implementation as v1.)
+Implement FileOperations patch/search according to the design spec.
 
 - [ ] **Step 4: Run tests**
 
@@ -1531,53 +1555,56 @@ git commit -m "feat: FileOperations patch (fuzzy match) + search (ripgrep)"
 
 ---
 
-## Task 10: envtools -- Action Dispatch and Help Generation
+## Task 10: sandbox_env -- Action Dispatch and Help Generation
 
 **Files:**
-- Create: `envtools.py`
-- Test: `tests/test_envtools.py`
+- Create: `sandbox_env.py`
+- Test: `tests/test_sandbox_env.py`
 
-envtools implements 15 actions with three-level lazy discovery:
-- `help`: returns general ops (use/status/shell_close/shell_list) + pointers to docker_help/ssh_help
-- `status`: returns active target, targets, shells
+sandbox_env implements 18 actions with progressive discovery:
+- `help`: returns common ops (default_set/shell_new/shell_list/shell_remove) + pointers to docker_help/ssh_help
+- `status`: returns default target, targets, shells
 - `docker_help`: returns Docker ops (docker_run/build/commit/stop/start/remove)
 - `ssh_help`: returns SSH ops (ssh_connect/disconnect/reconnect/remove)
-- Plus all execution actions (use, docker_run, ssh_connect, etc.)
+- Plus all discovered execution actions (default_set, shell_new, docker_run, ssh_connect, etc.)
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/test_envtools.py
+# tests/test_sandbox_env.py
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from envtools import EnvTools
+from sandbox_env import SandboxEnv
 
 
 @pytest.fixture
-def envtools():
+def sandbox_env():
     targets = MagicMock()
     shells = MagicMock()
     docker_backend = MagicMock()
     ssh_backend = MagicMock()
-    return EnvTools(targets, shells, docker_backend, ssh_backend)
+    return SandboxEnv(targets, shells, docker_backend, ssh_backend)
 
 
-def test_help_returns_operations_and_pointers(envtools):
-    result = envtools.dispatch("help", {})
+def test_help_returns_operations_and_pointers(sandbox_env):
+    result = sandbox_env.dispatch("help", {})
+    assert "default_actions" in result
+    default_actions = [op["action"] for op in result["default_actions"]]
+    assert default_actions == ["help", "status"]
     assert "operations" in result
     actions = [op["action"] for op in result["operations"]]
-    assert "use" in actions
-    assert "status" in actions
-    assert "shell_close" in actions
+    assert "default_set" in actions
+    assert "shell_new" in actions
+    assert "shell_remove" in actions
     assert "shell_list" in actions
     assert "more_help" in result
     assert "docker_help" in result["more_help"]
     assert "ssh_help" in result["more_help"]
 
 
-def test_docker_help_returns_docker_ops(envtools):
-    result = envtools.dispatch("docker_help", {})
+def test_docker_help_returns_docker_ops(sandbox_env):
+    result = sandbox_env.dispatch("docker_help", {})
     actions = [op["action"] for op in result["operations"]]
     assert "docker_run" in actions
     assert "docker_build" in actions
@@ -1587,8 +1614,8 @@ def test_docker_help_returns_docker_ops(envtools):
     assert "docker_remove" in actions
 
 
-def test_ssh_help_returns_ssh_ops(envtools):
-    result = envtools.dispatch("ssh_help", {})
+def test_ssh_help_returns_ssh_ops(sandbox_env):
+    result = sandbox_env.dispatch("ssh_help", {})
     actions = [op["action"] for op in result["operations"]]
     assert "ssh_connect" in actions
     assert "ssh_disconnect" in actions
@@ -1596,76 +1623,103 @@ def test_ssh_help_returns_ssh_ops(envtools):
     assert "ssh_remove" in actions
 
 
-def test_use_sets_active_target(envtools):
-    envtools.targets.resolve_target.return_value = "dev"
-    result = envtools.dispatch("use", {"target": "dev"})
-    envtools.targets.set_active.assert_called_once_with("dev")
-    assert result == {"active_target": "dev"}
+def test_default_set_sets_default_target(sandbox_env):
+    sandbox_env._targets.resolve_target.return_value = "dev"
+    result = sandbox_env.dispatch("default_set", {"target": "dev"})
+    sandbox_env._targets.set_default.assert_called_once_with("dev")
+    assert result == {"default_target": "dev"}
 
 
-def test_status_returns_state(envtools):
-    envtools.targets.get_active.return_value = "dev"
-    envtools.targets.list_targets.return_value = ["dev"]
+def test_default_set_sets_default_shell(sandbox_env):
+    sandbox_env._shells.get_target.return_value = "dev"
+    result = sandbox_env.dispatch("default_set", {"shell_id": "sh_abc"})
+    sandbox_env._shells.get_target.assert_called_once_with("sh_abc")
+    sandbox_env._shells.set_default.assert_called_once_with("sh_abc")
+    assert result == {"default_shell": {"target": "dev", "shell_id": "sh_abc"}}
+
+
+def test_default_set_rejects_both_target_and_shell(sandbox_env):
+    result = sandbox_env.dispatch("default_set", {"target": "dev", "shell_id": "sh_abc"})
+    assert "error" in result
+
+
+def test_status_returns_state(sandbox_env):
+    sandbox_env._targets.get_default.return_value = "dev"
+    sandbox_env._targets.list_targets.return_value = ["dev"]
     info = MagicMock(name="dev", backend="docker", status="running",
                      purpose="test", shells=0, uptime="")
-    envtools.targets.get_info.return_value = info
-    envtools.shells.list_shells.return_value = []
-    result = envtools.dispatch("status", {})
-    assert result["active_target"] == "dev"
+    sandbox_env._targets.get_info.return_value = info
+    sandbox_env._shells.list_shells.return_value = []
+    result = sandbox_env.dispatch("status", {})
+    assert result["default_target"] == "dev"
     assert len(result["targets"]) == 1
     assert "shells" in result
 
 
-def test_shell_close(envtools):
-    envtools.shells.close.return_value = True
-    result = envtools.dispatch("shell_close", {"shell_id": "sh_abc"})
-    assert result["status"] == "closed"
+def test_shell_new(sandbox_env):
+    backend = MagicMock()
+    shell = MagicMock()
+    backend.open_shell.return_value = shell
+    sandbox_env._targets.resolve_target.return_value = "dev"
+    sandbox_env._targets.get_backend.return_value = backend
+    sandbox_env._shells.open.return_value = "sh_abc"
+    result = sandbox_env.dispatch("shell_new", {"target": "dev", "purpose": "server"})
+    backend.open_shell.assert_called_once_with("dev")
+    sandbox_env._shells.open.assert_called_once_with("dev", shell, purpose="server")
+    assert result == {"shell_id": "sh_abc", "target": "dev"}
 
 
-def test_shell_list(envtools):
-    envtools.shells.list_shells.return_value = [
+def test_shell_remove(sandbox_env):
+    sandbox_env._shells.close.return_value = True
+    result = sandbox_env.dispatch("shell_remove", {"shell_id": "sh_abc"})
+    assert result["status"] == "removed"
+
+
+def test_shell_list(sandbox_env):
+    sandbox_env._shells.list_shells.return_value = [
         {"shell_id": "sh_abc", "target": "dev", "status": "idle"}
     ]
-    result = envtools.dispatch("shell_list", {})
+    result = sandbox_env.dispatch("shell_list", {})
     assert len(result) == 1
 
 
-def test_docker_run(envtools):
+def test_docker_run(sandbox_env):
     info = MagicMock(name="dev", backend="docker", status="running", purpose="test")
-    envtools.targets.register.return_value = info
-    result = envtools.dispatch("docker_run", {
+    sandbox_env._targets.register.return_value = info
+    result = sandbox_env.dispatch("docker_run", {
         "name": "dev", "image": "python:3.12", "purpose": "test"
     })
     assert result["status"] == "running"
     assert result["backend"] == "docker"
 
 
-def test_unknown_action_returns_error(envtools):
-    result = envtools.dispatch("nonexistent", {})
+def test_unknown_action_returns_error(sandbox_env):
+    result = sandbox_env.dispatch("nonexistent", {})
     assert "error" in result
 
 
-def test_missing_required_param_returns_error(envtools):
-    result = envtools.dispatch("docker_run", {"name": "dev"})  # missing image, purpose
+def test_missing_required_param_returns_error(sandbox_env):
+    result = sandbox_env.dispatch("docker_run", {"name": "dev"})  # missing image, purpose
     assert "error" in result
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-pytest tests/test_envtools.py -v
+pytest tests/test_sandbox_env.py -v
 ```
 
-- [ ] **Step 3: Implement EnvTools**
+- [ ] **Step 3: Implement SandboxEnv**
 
 ```python
-# envtools.py
-"""envtools: lazy-discovery environment management with 15 actions.
+# sandbox_env.py
+"""sandbox_env: progressive-discovery environment management with 18 actions.
 
-Three-level discovery:
-  help         -> general ops + pointers to docker_help/ssh_help
-  docker_help  -> Docker-specific ops
-  ssh_help     -> SSH-specific ops
+Progressive discovery:
+  tools/list    -> only describes help/status
+  help          -> common ops + pointers to docker_help/ssh_help
+  docker_help   -> Docker-specific ops
+  ssh_help      -> SSH-specific ops
 """
 
 import json
@@ -1676,21 +1730,32 @@ from typing import Any
 # --- Static help definitions ---
 
 HELP_RESPONSE = {
-    "operations": [
+    "default_actions": [
         {
-            "action": "use",
-            "description": "Set active target. Core tools use this when no target param is given.",
-            "required": {"target": "string"},
-            "example": {"target": "dev"},
+            "action": "help",
+            "description": "Discover common management actions and backend help entries.",
         },
         {
             "action": "status",
-            "description": "Show current state: active target, target list, shell list.",
-            "params": {},
+            "description": "Show current state: default target, target list, shell list.",
+        },
+    ],
+    "operations": [
+        {
+            "action": "default_set",
+            "description": "Set default target or default shell. Pass target to set the default target. Pass shell_id to set that shell as its target's default shell.",
+            "optional": {"target": "string", "shell_id": "string"},
+            "requires": "Exactly one of target or shell_id",
+            "example": {"target": "dev"},
         },
         {
-            "action": "shell_close",
-            "description": "Close a shell session. Use to clean up terminated shells.",
+            "action": "shell_new",
+            "description": "Create an additional shell session on a target.",
+            "optional": {"target": "string", "purpose": "string"},
+        },
+        {
+            "action": "shell_remove",
+            "description": "Terminate and remove a shell session. If already terminated, remove the registry entry.",
             "required": {"shell_id": "string"},
         },
         {
@@ -1703,7 +1768,7 @@ HELP_RESPONSE = {
         "docker_help": "Docker: create/build/commit/stop/start/remove containers",
         "ssh_help": "SSH: connect/disconnect/reconnect/remove remote targets",
     },
-    "note": "Core tools (shell_send/shell_read/shell_open/read/write/patch/search) are directly exposed with optional target param.",
+    "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. Target-aware tools support optional target.",
 }
 
 DOCKER_HELP_RESPONSE = {
@@ -1792,8 +1857,8 @@ SSH_HELP_RESPONSE = {
 }
 
 
-class EnvTools:
-    """Dispatches envtools actions and generates help responses."""
+class SandboxEnv:
+    """Dispatches sandbox_env actions and generates help responses."""
 
     def __init__(self, targets, shells, docker_backend, ssh_backend):
         self._targets = targets
@@ -1822,7 +1887,7 @@ class EnvTools:
         return SSH_HELP_RESPONSE
 
     def _op_status(self, params):
-        active = self._targets.get_active()
+        default = self._targets.get_default()
         targets = []
         for name in self._targets.list_targets():
             info = self._targets.get_info(name)
@@ -1839,21 +1904,37 @@ class EnvTools:
                 "uptime": uptime,
             })
         shells = self._shells.list_shells()
-        return {"active_target": active, "targets": targets, "shells": shells}
+        return {"default_target": default, "targets": targets, "shells": shells}
 
     # --- General actions ---
 
-    def _op_use(self, params):
-        if "target" not in params:
-            return {"error": "Missing required param: target"}
-        self._targets.set_active(params["target"])
-        return {"active_target": params["target"]}
+    def _op_default_set(self, params):
+        has_target = "target" in params
+        has_shell = "shell_id" in params
+        if has_target == has_shell:
+            return {"error": "Pass exactly one of target or shell_id"}
+        if has_target:
+            target = self._targets.resolve_target(params["target"])
+            self._targets.set_default(target)
+            return {"default_target": target}
+        shell_target = self._shells.get_target(params["shell_id"])
+        if shell_target is None:
+            return {"error": f"Unknown shell_id: {params['shell_id']}"}
+        self._shells.set_default(params["shell_id"])
+        return {"default_shell": {"target": shell_target, "shell_id": params["shell_id"]}}
 
-    def _op_shell_close(self, params):
+    def _op_shell_new(self, params):
+        target = self._targets.resolve_target(params.get("target"))
+        backend = self._targets.get_backend(target)
+        shell = backend.open_shell(target)
+        shell_id = self._shells.open(target, shell, purpose=params.get("purpose", "manual"))
+        return {"shell_id": shell_id, "target": target}
+
+    def _op_shell_remove(self, params):
         if "shell_id" not in params:
             return {"error": "Missing required param: shell_id"}
         if self._shells.close(params["shell_id"]):
-            return {"shell_id": params["shell_id"], "status": "closed"}
+            return {"shell_id": params["shell_id"], "status": "removed"}
         return {"error": f"Unknown shell_id: {params['shell_id']}"}
 
     def _op_shell_list(self, params):
@@ -1999,27 +2080,28 @@ class EnvTools:
 - [ ] **Step 4: Run tests**
 
 ```bash
-pytest tests/test_envtools.py -v
+pytest tests/test_sandbox_env.py -v
 ```
-Expected: 10 passed
+Expected: 13 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add envtools.py tests/test_envtools.py
-git commit -m "feat: envtools with 3-level lazy discovery and 15 actions"
+git add sandbox_env.py tests/test_sandbox_env.py
+git commit -m "feat: sandbox_env with progressive discovery and 18 actions"
 ```
 
 ---
 
-## Task 11: MCP Server -- 8 Tool Definitions and Dispatch
+## Task 11: MCP Server -- 7 Tool Definitions and Dispatch
 
 **Files:**
 - Create: `server.py`
 - Test: `tests/test_server.py`
 
-Server exposes 8 tools: shell_send, shell_read, shell_open, read, write, patch,
-search, envtools. Dispatches to ShellSession, FileOperations, or EnvTools.
+Server exposes 7 tools: sandbox_shell_exec, sandbox_shell_read,
+sandbox_file_read, sandbox_file_write, sandbox_file_patch, sandbox_file_search,
+and sandbox_env. Dispatches to ShellSession, FileOperations, or SandboxEnv.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2036,18 +2118,17 @@ def server():
     return SandboxServer()
 
 
-def test_list_tools_returns_8(server):
+def test_list_tools_returns_7(server):
     tools = server.list_tools()
-    assert len(tools) == 8
+    assert len(tools) == 7
     names = {t.name for t in tools}
-    assert "sandbox_shell_send" in names
+    assert "sandbox_shell_exec" in names
     assert "sandbox_shell_read" in names
-    assert "sandbox_shell_open" in names
-    assert "sandbox_read" in names
-    assert "sandbox_write" in names
-    assert "sandbox_patch" in names
-    assert "sandbox_search" in names
-    assert "envtools" in names
+    assert "sandbox_file_read" in names
+    assert "sandbox_file_write" in names
+    assert "sandbox_file_patch" in names
+    assert "sandbox_file_search" in names
+    assert "sandbox_env" in names
 
 
 def test_call_unknown_tool(server):
@@ -2056,17 +2137,17 @@ def test_call_unknown_tool(server):
     assert "error" in data
 
 
-def test_envtools_help(server):
-    result = server.call_tool("envtools", {"action": "help"})
+def test_sandbox_env_help(server):
+    result = server.call_tool("sandbox_env", {"action": "help"})
     data = json.loads(result[0].text)
     assert "operations" in data
     assert "more_help" in data
 
 
-def test_envtools_status_empty(server):
-    result = server.call_tool("envtools", {"action": "status"})
+def test_sandbox_env_status_empty(server):
+    result = server.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["active_target"] is None
+    assert data["default_target"] is None
     assert data["targets"] == []
 ```
 
@@ -2080,7 +2161,7 @@ pytest tests/test_server.py -v
 
 ```python
 # server.py
-"""Sandbox MCP Server v2: 8 tools (7 core + 1 envtools entry)."""
+"""Sandbox MCP Server v2: 7 tools (6 core + 1 sandbox_env entry)."""
 
 import json
 import logging
@@ -2089,7 +2170,7 @@ from typing import Any
 from target_registry import TargetRegistry
 from shell_registry import ShellRegistry
 from file_operations import FileOperations
-from envtools import EnvTools
+from sandbox_env import SandboxEnv
 from backends.docker_backend import DockerBackend
 from backends.ssh_backend import SSHBackend
 
@@ -2097,14 +2178,14 @@ logger = logging.getLogger(__name__)
 
 TOOL_DEFINITIONS = [
     {
-        "name": "sandbox_shell_send",
-        "description": "Send a command to a shell. wait=true (default) blocks until completion or timeout. wait=false returns immediately after confirming execution started.",
+        "name": "sandbox_shell_exec",
+        "description": "Execute a shell command. wait=true (default) blocks until completion or timeout. wait=false returns after confirming execution started.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command to execute"},
                 "shell_id": {"type": "string", "description": "Specific shell (default: target's default shell)"},
-                "target": {"type": "string", "description": "Target name (default: active target)"},
+                "target": {"type": "string", "description": "Target name (default: default target)"},
                 "wait": {"type": "boolean", "description": "Wait for completion (default: true)"},
                 "timeout": {"type": "integer", "description": "Seconds to wait (default: 30)"},
                 "max_output": {"type": "integer", "description": "Max output bytes (default: 50000)"},
@@ -2124,24 +2205,13 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_shell_open",
-        "description": "Open a new persistent shell session. Like a new terminal tab.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "target": {"type": "string", "description": "Target name (default: active)"},
-                "purpose": {"type": "string", "description": "What this shell is for"},
-            },
-        },
-    },
-    {
-        "name": "sandbox_read",
+        "name": "sandbox_file_read",
         "description": "Read a text file with line numbers and pagination.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "target": {"type": "string", "description": "Target name (default: active)"},
+                "target": {"type": "string", "description": "Target name (default: default target)"},
                 "offset": {"type": "integer", "description": "Start line (1-indexed, default: 1)"},
                 "limit": {"type": "integer", "description": "Max lines (default: 500, max: 2000)"},
             },
@@ -2149,20 +2219,20 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_write",
+        "name": "sandbox_file_write",
         "description": "Write content to a file, replacing existing. Creates parent dirs. Auto syntax check.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
                 "content": {"type": "string", "description": "Complete file content"},
-                "target": {"type": "string", "description": "Target name (default: active)"},
+                "target": {"type": "string", "description": "Target name (default: default target)"},
             },
             "required": ["path", "content"],
         },
     },
     {
-        "name": "sandbox_patch",
+        "name": "sandbox_file_patch",
         "description": "Targeted find-and-replace edits with fuzzy matching. mode=replace or mode=patch (V4A).",
         "inputSchema": {
             "type": "object",
@@ -2173,20 +2243,20 @@ TOOL_DEFINITIONS = [
                 "new_string": {"type": "string", "description": "Replacement text (replace mode)"},
                 "replace_all": {"type": "boolean", "description": "Replace all (default: false)"},
                 "patch": {"type": "string", "description": "V4A patch content (patch mode)"},
-                "target": {"type": "string", "description": "Target name (default: active)"},
+                "target": {"type": "string", "description": "Target name (default: default target)"},
             },
             "required": ["mode"],
         },
     },
     {
-        "name": "sandbox_search",
+        "name": "sandbox_file_search",
         "description": "Search file contents (ripgrep) or find files by name (glob).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string"},
                 "search_type": {"type": "string", "enum": ["content", "files"], "description": "default: content"},
-                "target": {"type": "string", "description": "Target name (default: active)"},
+                "target": {"type": "string", "description": "Target name (default: default target)"},
                 "path": {"type": "string", "description": "Directory to search (default: cwd)"},
                 "file_glob": {"type": "string", "description": "Filter files (e.g. *.py)"},
                 "limit": {"type": "integer", "description": "Max results (default: 50)"},
@@ -2198,13 +2268,13 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "envtools",
-        "description": "Environment management. Call action=help for operations, action=docker_help/ssh_help for backend ops, action=status for current state. Core tools support optional target param.",
+        "name": "sandbox_env",
+        "description": "Environment management. Call action=help to discover operations or action=status for current state. Other actions are discovered on demand.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "description": "Operation name. Call action=help for details."},
-                "params": {"type": "object", "description": "Operation params. Call action=help for format."},
+                "action": {"type": "string", "description": "Operation name. Start with help or status."},
+                "params": {"type": "object", "description": "Operation params documented by help actions."},
             },
             "required": ["action"],
         },
@@ -2233,7 +2303,7 @@ class SandboxServer:
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
-        self.envtools = EnvTools(self.targets, self.shells,
+        self.sandbox_env = SandboxEnv(self.targets, self.shells,
                                  self._docker_backend, self._ssh_backend)
 
     def list_tools(self) -> list[ToolDef]:
@@ -2255,7 +2325,7 @@ class SandboxServer:
 
     # --- Shell handlers ---
 
-    def _handle_sandbox_shell_send(self, args: dict) -> dict:
+    def _handle_sandbox_shell_exec(self, args: dict) -> dict:
         target = self._resolve_target(args)
         backend = self.targets.get_backend(target)
         shell_id = args.get("shell_id")
@@ -2282,32 +2352,25 @@ class SandboxServer:
             return {"error": f"Unknown shell_id: {args['shell_id']}"}
         return session.read()
 
-    def _handle_sandbox_shell_open(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        backend = self.targets.get_backend(target)
-        session = backend.open_shell(target)
-        shell_id = self.shells.open(target, session, purpose=args.get("purpose", ""))
-        return {"shell_id": shell_id, "target": target}
-
     # --- File operation handlers ---
 
     def _get_file_ops(self, target: str) -> FileOperations:
         backend = self.targets.get_backend(target)
         return FileOperations(backend)
 
-    def _handle_sandbox_read(self, args: dict) -> dict:
+    def _handle_sandbox_file_read(self, args: dict) -> dict:
         target = self._resolve_target(args)
         fops = self._get_file_ops(target)
         return fops.read(args["path"], target,
                          offset=args.get("offset", 1),
                          limit=args.get("limit", 500))
 
-    def _handle_sandbox_write(self, args: dict) -> dict:
+    def _handle_sandbox_file_write(self, args: dict) -> dict:
         target = self._resolve_target(args)
         fops = self._get_file_ops(target)
         return fops.write(args["path"], args["content"], target)
 
-    def _handle_sandbox_patch(self, args: dict) -> dict:
+    def _handle_sandbox_file_patch(self, args: dict) -> dict:
         target = self._resolve_target(args)
         fops = self._get_file_ops(target)
         return fops.patch(
@@ -2319,7 +2382,7 @@ class SandboxServer:
             patch=args.get("patch", ""),
         )
 
-    def _handle_sandbox_search(self, args: dict) -> dict:
+    def _handle_sandbox_file_search(self, args: dict) -> dict:
         target = self._resolve_target(args)
         fops = self._get_file_ops(target)
         return fops.search(
@@ -2333,12 +2396,12 @@ class SandboxServer:
             context=args.get("context", 0),
         )
 
-    # --- envtools handler ---
+    # --- sandbox_env handler ---
 
-    def _handle_envtools(self, args: dict) -> Any:
+    def _handle_sandbox_env(self, args: dict) -> Any:
         action = args.get("action", "")
         params = args.get("params", {})
-        return self.envtools.dispatch(action, params)
+        return self.sandbox_env.dispatch(action, params)
 
 
 def main():
@@ -2387,7 +2450,7 @@ Expected: 4 passed
 
 ```bash
 git add server.py tests/test_server.py
-git commit -m "feat: SandboxServer with 8 tools and envtools dispatch"
+git commit -m "feat: SandboxServer with 7 tools and sandbox_env dispatch"
 ```
 
 ---
@@ -2419,26 +2482,26 @@ def server():
 
 @pytest.fixture
 def docker_target(server):
-    """Create a temporary Docker target via envtools."""
-    result = server.call_tool("envtools", {
+    """Create a temporary Docker target via sandbox_env."""
+    result = server.call_tool("sandbox_env", {
         "action": "docker_run",
         "params": {"name": "test-integration", "image": "python:3.12-slim", "purpose": "integration test"},
     })
     data = json.loads(result[0].text)
     if "error" in data:
         pytest.skip(f"Cannot create Docker container: {data['error']}")
-    server.call_tool("envtools", {
-        "action": "use", "params": {"target": "test-integration"},
+    server.call_tool("sandbox_env", {
+        "action": "default_set", "params": {"target": "test-integration"},
     })
     yield server
-    server.call_tool("envtools", {
+    server.call_tool("sandbox_env", {
         "action": "docker_remove", "params": {"target": "test-integration"},
     })
 
 
-def test_shell_send_wait_true(docker_target):
-    """shell_send(wait=true) executes a command and returns output."""
-    result = docker_target.call_tool("sandbox_shell_send", {
+def test_shell_exec_wait_true(docker_target):
+    """shell_exec(wait=true) executes a command and returns output."""
+    result = docker_target.call_tool("sandbox_shell_exec", {
         "command": "echo hello_from_docker",
     })
     data = json.loads(result[0].text)
@@ -2446,21 +2509,21 @@ def test_shell_send_wait_true(docker_target):
     assert "hello_from_docker" in data["output"]
 
 
-def test_shell_send_preserves_state(docker_target):
+def test_shell_exec_preserves_state(docker_target):
     """Environment changes persist across send calls."""
-    docker_target.call_tool("sandbox_shell_send", {
+    docker_target.call_tool("sandbox_shell_exec", {
         "command": "export TEST_VAR=12345",
     })
-    result = docker_target.call_tool("sandbox_shell_send", {
+    result = docker_target.call_tool("sandbox_shell_exec", {
         "command": "echo $TEST_VAR",
     })
     data = json.loads(result[0].text)
     assert "12345" in data["output"]
 
 
-def test_shell_send_wait_false_then_read(docker_target):
-    """shell_send(wait=false) starts command, shell_read gets output."""
-    result = docker_target.call_tool("sandbox_shell_send", {
+def test_shell_exec_wait_false_then_read(docker_target):
+    """shell_exec(wait=false) starts command, shell_read gets output."""
+    result = docker_target.call_tool("sandbox_shell_exec", {
         "command": "echo started; sleep 0.5; echo done",
         "wait": False,
         "timeout": 3,
@@ -2470,12 +2533,12 @@ def test_shell_send_wait_false_then_read(docker_target):
     assert data["confirmed"] is True
 
     # Need shell_id - get from default shell
-    # The send used default shell, so we need to get its id
+    # The exec used default shell, so we need to get its id
     import time
     time.sleep(1.5)
 
     # Read via shell_list to find the shell
-    list_result = docker_target.call_tool("envtools", {
+    list_result = docker_target.call_tool("sandbox_env", {
         "action": "shell_list", "params": {"target": "test-integration"},
     })
     shells = json.loads(list_result[0].text)
@@ -2491,14 +2554,14 @@ def test_shell_send_wait_false_then_read(docker_target):
 
 def test_file_operations_in_docker(docker_target):
     """Write and read a file in a Docker container."""
-    result = docker_target.call_tool("sandbox_write", {
+    result = docker_target.call_tool("sandbox_file_write", {
         "path": "/tmp/test_file.txt",
         "content": "line1\nline2\nline3\n",
     })
     data = json.loads(result[0].text)
     assert data["status"] == "ok"
 
-    result = docker_target.call_tool("sandbox_read", {
+    result = docker_target.call_tool("sandbox_file_read", {
         "path": "/tmp/test_file.txt",
     })
     data = json.loads(result[0].text)
@@ -2506,18 +2569,18 @@ def test_file_operations_in_docker(docker_target):
     assert "2|line2" in data["output"]
 
 
-def test_envtools_status(docker_target):
-    """envtools status shows the target."""
-    result = docker_target.call_tool("envtools", {"action": "status"})
+def test_sandbox_env_status(docker_target):
+    """sandbox_env status shows the target."""
+    result = docker_target.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["active_target"] == "test-integration"
+    assert data["default_target"] == "test-integration"
     assert len(data["targets"]) == 1
     assert data["targets"][0]["backend"] == "docker"
 
 
 def test_docker_commit(docker_target):
     """Commit container state to a new image."""
-    result = docker_target.call_tool("envtools", {
+    result = docker_target.call_tool("sandbox_env", {
         "action": "docker_commit",
         "params": {"target": "test-integration", "image_tag": "sandbox-test-snapshot:latest"},
     })
@@ -2543,7 +2606,7 @@ Expected: All unit tests pass, integration tests pass/skip
 
 ```bash
 git add tests/test_integration_docker.py
-git commit -m "test: integration tests for Docker backend with shell_send and envtools"
+git commit -m "test: integration tests for Docker backend with shell_exec and sandbox_env"
 ```
 
 ---
@@ -2553,7 +2616,7 @@ git commit -m "test: integration tests for Docker backend with shell_send and en
 ### Spec Coverage (v2 design-spec)
 
 - [x] Three-layer tool exposure (tools/list -> help -> docker_help/ssh_help) -- Task 10, 11
-- [x] shell_send with dual markers (wait=true/false) -- Task 2
+- [x] shell_exec with dual markers (wait=true/false) -- Task 2
 - [x] Shell state machine (idle/busy/running/terminated) -- Task 2
 - [x] Background drain thread (head 5K + tail ring buffer) -- Task 2
 - [x] Output truncation (tail, max_output param) -- Task 2
@@ -2561,10 +2624,10 @@ git commit -m "test: integration tests for Docker backend with shell_send and en
 - [x] shell_read from in-memory buffer, detects markers -- Task 2
 - [x] Manual cleanup, shell_list hints for terminated -- Task 7
 - [x] Backend-specialized lifecycle (docker_stop/ssh_disconnect) -- Task 4, 5, 10
-- [x] envtools 15 actions with lazy discovery -- Task 10
-- [x] envtools inputSchema (~100 tokens) -- Task 11
-- [x] Core 7 tools + envtools = 8 tools in tools/list -- Task 11
-- [x] Hybrid targeting model (use + optional target) -- Task 6, 11
+- [x] sandbox_env 18 actions with progressive discovery -- Task 10
+- [x] sandbox_env inputSchema (~100 tokens) -- Task 11
+- [x] Core 6 tools + sandbox_env = 7 tools in tools/list -- Task 11
+- [x] Default targeting model (default_set + optional target) -- Task 6, 10, 11
 - [x] File operations (read/write/patch/search) -- Task 8, 9
 - [x] Docker backend (run/build/commit/stop/start/remove) -- Task 4
 - [x] SSH backend (connect/disconnect/reconnect/remove) -- Task 5
@@ -2576,4 +2639,4 @@ No TBD/TODO. All code blocks are complete implementations.
 - ShellSession.send returns {output, exit_code, status} or {status, confirmed} -- consistent
 - ShellSession.read returns {output, status, [exit_code]} -- consistent
 - TargetInfo has name/backend/status/purpose -- consistent
-- envtools.dispatch returns dict or list -- consistent, JSON-serializable
+- sandbox_env.dispatch returns dict or list -- consistent, JSON-serializable

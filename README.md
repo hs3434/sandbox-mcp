@@ -9,10 +9,11 @@ tools, adding persistent environment management that the built-in tools lack.
 
 ## Features
 
+- **Compact MCP surface**: 7 exposed tools, with progressive management discovery via `sandbox_env`
 - **Multi-backend**: Docker containers + SSH remote machines
 - **Persistent targets**: Environments survive across sessions
-- **Shell-based execution**: Real-time I/O, stdin control, job management
-- **Full file operations**: Read, write, patch (fuzzy match), search (ripgrep)
+- **Shell-based execution**: command execution, real-time reads, stdin control, job management
+- **Full file operations**: read, write, patch (fuzzy match), search (ripgrep/glob)
 - **Docker image building**: Agent can define custom environments
 - **Docker commit**: Save container state for persistence
 
@@ -37,4 +38,4 @@ pip install -e .
 
 ## Design
 
-See [docs/design-spec.md](docs/design-spec.md) for the full design specification.
+See [docs/design-spec-v2.md](docs/design-spec-v2.md) for the current design specification.

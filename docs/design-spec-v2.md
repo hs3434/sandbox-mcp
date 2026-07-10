@@ -1,7 +1,6 @@
 # Sandbox MCP v2 Design Spec
 
-> Supersedes `design-spec.md`. Reflects the redesigned tool architecture from the
-> 2026-07-10 design review.
+> Current design as of the 2026-07-10 design review.
 
 ## Problem (unchanged)
 
@@ -12,16 +11,17 @@ tools also consume context window space.
 
 ## What Changed from v1
 
-| Aspect | v1 (19 tools) | v2 (8 tools) |
-|--------|---------------|---------------|
-| tools/list count | 19 | 8 (7 core + 1 envtools) |
-| Context per API call | ~2850 tokens | ~1000 tokens |
-| Management ops | All exposed directly | Lazy discovery via envtools |
-| Shell exec + write | Separate tools (exec + shell_write) | Merged into shell_send (wait param) |
-| Lifecycle ops | Generic stop/start/remove | Backend-specialized (docker_stop/ssh_disconnect) |
+| Aspect | v1 (19 tools) | v2 (7 tools) |
+|--------|---------------|--------------|
+| tools/list count | 19 | 7 (6 core + 1 sandbox_env) |
+| Context per API call | ~2850 tokens | ~875 tokens |
+| Management ops | All exposed directly | Progressive discovery via sandbox_env |
+| Shell exec + write | Separate tools (exec + shell_write) | Merged into sandbox_shell_exec (wait param) |
+| Shell creation/cleanup | Exposed tools | Discovered via sandbox_env(action="help") |
+| Lifecycle ops | Generic stop/start/remove | Backend-specialized after docker_help/ssh_help |
 | Shell I/O confirmation | Single marker (end only) | Dual marker (start + end) |
 | Output buffer | Unbounded pipe reads | Drain thread, head 5K + tail ring buffer |
-| Shell cleanup | Automatic | Manual (agent-controlled, shell_list hints) |
+| Shell cleanup | Automatic | Manual via shell_remove |
 
 ## Architecture
 
@@ -29,69 +29,84 @@ tools also consume context window space.
 Hermes Gateway (host process)
   └── MCP Client (JSON-RPC over stdio)
         └── Sandbox MCP Server (host process)
-              ├── tools/list (8 tools, ~1000 tokens/轮)
-              │     ├── Core: shell_send, shell_read, shell_open
-              │     ├── Core: read, write, patch, search
-              │     └── Entry: envtools
+              ├── tools/list (7 tools, ~875 tokens/轮)
+              │     ├── Core: sandbox_shell_exec, sandbox_shell_read
+              │     ├── Core: sandbox_file_read/write/patch/search
+              │     └── Entry: sandbox_env
+              │           └── Default description only advertises help/status
               │
-              └── envtools (lazy discovery, 15 actions)
-                    ├── help / status
-                    ├── use / shell_close / shell_list
-                    ├── docker_run / docker_build / docker_commit
-                    │   docker_stop / docker_start / docker_remove
-                    └── ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
+              └── sandbox_env progressive discovery
+                    ├── action=help
+                    │     ├── default_set
+                    │     ├── shell_new / shell_list / shell_remove
+                    │     └── docker_help / ssh_help
+                    ├── action=docker_help
+                    │     └── docker_run / docker_build / docker_commit
+                    │         docker_stop / docker_start / docker_remove
+                    └── action=ssh_help
+                          └── ssh_connect / ssh_disconnect / ssh_reconnect
+                              ssh_remove
 ```
 
 ## Three-Layer Tool Exposure
 
-### Layer 1: tools/list (always exposed, ~1000 tokens)
+### Layer 1: tools/list (always exposed, ~875 tokens)
 
-8 tools with simple, well-defined schemas:
+7 tools with simple, well-defined schemas:
 
 | Tool | Purpose | Frequency |
 |------|---------|-----------|
-| `sandbox_shell_send` | Send command to shell (wait or non-blocking) | High |
+| `sandbox_shell_exec` | Execute a shell command (wait or non-blocking) | High |
 | `sandbox_shell_read` | Non-blocking read of shell output | High |
-| `sandbox_shell_open` | Open new persistent shell | Medium |
-| `sandbox_read` | Read file with line numbers + pagination | High |
-| `sandbox_write` | Write file (full content) | High |
-| `sandbox_patch` | Targeted find-and-replace (fuzzy match) | High |
-| `sandbox_search` | Ripgrep content search + glob file search | High |
-| `envtools` | Environment management entry point | Low |
+| `sandbox_file_read` | Read file with line numbers + pagination | High |
+| `sandbox_file_write` | Write file (full content) | High |
+| `sandbox_file_patch` | Targeted find-and-replace (fuzzy match) | High |
+| `sandbox_file_search` | Ripgrep content search + glob file search | High |
+| `sandbox_env` | Environment management discovery and dispatch | Low |
 
-All core tools accept an optional `target` parameter (default: active target set
-via `envtools(action="use")`).
+Target-aware core tools accept an optional `target` parameter (default: default
+target set via `sandbox_env(action="default_set")`). `sandbox_shell_read` uses
+`shell_id` and does not need a target.
 
-### Layer 2: envtools help (on-demand, ~200 tokens)
+### Layer 2: sandbox_env help (on-demand, ~200 tokens)
 
-`envtools(action="help")` returns:
-- `use`: set active target
-- `status`: check current state (targets, active target, shells)
-- `shell_close`: close shell session
-- `shell_list`: list shells
+The `sandbox_env` schema intentionally keeps the default `tools/list` entry
+small. Its description only advertises two actions:
+
+- `help`: discover common management operations
+- `status`: inspect default target, targets, and shells
+
+`action` remains a free string, not an enum, so discovered operations can be
+called through the same tool.
+
+`sandbox_env(action="help")` returns:
+- `default_set`: set default target or default shell
+- `shell_new`: create an additional shell session
+- `shell_list`: list shell sessions
+- `shell_remove`: terminate/remove a shell session
 - Pointers to `docker_help` and `ssh_help`
 
 ### Layer 3: backend-specific help (on-demand, ~400 tokens each)
 
-- `envtools(action="docker_help")`: docker_run, docker_build, docker_commit,
+- `sandbox_env(action="docker_help")`: docker_run, docker_build, docker_commit,
   docker_stop, docker_start, docker_remove
-- `envtools(action="ssh_help")`: ssh_connect, ssh_disconnect, ssh_reconnect,
+- `sandbox_env(action="ssh_help")`: ssh_connect, ssh_disconnect, ssh_reconnect,
   ssh_remove
 
 Agent only loads the backend help it needs. A Docker-only agent never loads
 SSH docs.
 
-### envtools inputSchema (~100 tokens in tools/list)
+### sandbox_env inputSchema (~100 tokens in tools/list)
 
 ```json
 {
-  "name": "envtools",
-  "description": "环境管理工具。调action=help查看通用操作,action=docker_help/ssh_help查看后端操作,action=status查看状态。核心工具已直接暴露,支持可选target参数。",
+  "name": "sandbox_env",
+  "description": "Environment management. Call action=help to discover management operations or action=status to inspect current state. Other actions are discovered on demand.",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "action": {"type": "string", "description": "操作名"},
-      "params": {"type": "object", "description": "操作参数,调action=help获取格式"}
+      "action": {"type": "string", "description": "Operation name. Start with help or status."},
+      "params": {"type": "object", "description": "Operation parameters, documented by help actions."}
     },
     "required": ["action"]
   }
@@ -102,20 +117,21 @@ SSH docs.
 
 ```
 v1: 19 tools × ~150 tokens = ~2850 tokens/轮 (every API call)
-v2: 8 tools × ~125 tokens = ~1000 tokens/轮 (every API call)
-    + help (200 tokens, once) + docker_help (400 tokens, once) = ~1600 total
+v2: 7 tools × ~125 tokens = ~875 tokens/轮 (every API call)
+    + help (200 tokens, once) + docker_help (400 tokens, once) = ~1475 total
 
-Savings: ~44% on every API call, more for agents that don't need all backends.
+Savings: ~50% on every API call, more for agents that don't need all backends.
 ```
 
 ## Shell Design
 
-### sandbox_shell_send
+### sandbox_shell_exec
 
-Replaces v1's `sandbox_exec` + `shell_write` with a single tool.
+Replaces v1's `sandbox_exec` + `shell_write` with a single command execution
+tool.
 
 ```
-shell_send(command, shell_id?, target?, wait=true, timeout=30, max_output=50000)
+sandbox_shell_exec(command, shell_id?, target?, wait=true, timeout=30, max_output=50000)
 ```
 
 **Dual marker mechanism:**
@@ -175,14 +191,14 @@ until completion or timeout; dual marker's __START_ immediately confirms executi
 ```
 States: idle | busy | running | terminated
 
-shell_open() -> idle
+sandbox_env(action="shell_new") -> idle
 
-shell_send(wait=true):
+shell_exec(wait=true):
   idle -> busy (acquire lock, send command, wait for __END_)
   busy -> idle (__END_ found)
   busy -> running (timeout, lock released, command still running)
 
-shell_send(wait=false):
+shell_exec(wait=false):
   idle -> running (send command, wait for __START_, release)
 
 shell_read():
@@ -191,7 +207,7 @@ shell_read():
   idle -> idle (no output)
   any -> terminated (EOF detected by drain thread)
 
-shell_close():
+shell_remove():
   any -> removed from registry (no state, shell gone)
 
 bash process exits/dies:
@@ -200,14 +216,14 @@ bash process exits/dies:
 
 **Concurrency rules:**
 
-| Shell state | shell_send | shell_read | shell_close |
+| Shell state | shell_exec | shell_read | shell_remove |
 |-------------|-----------|------------|-------------|
 | idle | Allowed | Returns empty | Allowed |
 | busy | Rejected ("Shell is busy") | Rejected | Allowed (interrupts) |
 | running | Rejected ("Shell is busy") | Allowed | Allowed |
 | terminated | Rejected ("Shell terminated") | Returns remaining + terminated | Allowed (cleanup) |
 
-Per-shell lock ensures atomic state transitions. shell_send(wait=true) holds the
+Per-shell lock ensures atomic state transitions. shell_exec(wait=true) holds the
 lock during blocking read; other operations on the same shell are rejected.
 
 ### Background Drain Thread
@@ -232,9 +248,9 @@ When output exceeds 50KB:
 ```
 
 **Marker detection:** drain thread scans for __START_ and __END_ markers:
-- __START_ found: signal shell_send(wait=false) to return confirmed=true
+- __START_ found: signal shell_exec(wait=false) to return confirmed=true
 - __END_ found: extract exit_code, set state idle (if running), signal
-  shell_send(wait=true) to return
+  shell_exec(wait=true) to return
 - EOF (pipe closed): set state terminated, no exit_code available
 
 **shell_read reads from the in-memory buffer**, never from the pipe directly.
@@ -257,7 +273,7 @@ don't have this distinction.
 ### Output Truncation
 
 ```python
-shell_send(command, ..., max_output=50000)  # default 50KB
+shell_exec(command, ..., max_output=50000)  # default 50KB
 ```
 
 - Output <= max_output: return as-is
@@ -281,15 +297,15 @@ Agent does not need to parse markers itself.
 ### Shell Cleanup
 
 **No auto-cleanup.** Terminated shells stay in the registry until the agent
-explicitly calls `shell_close`. This prevents losing diagnostic information.
+explicitly calls `shell_remove`. This prevents losing diagnostic information.
 
 `shell_list` includes hints for terminated shells:
 
 ```json
 [
-  {"shell_id": "sh_abc", "target": "dev", "status": "idle", "uptime": "5m"},
-  {"shell_id": "sh_def", "target": "dev", "status": "terminated",
-   "hint": "Process exited. Call shell_close to clean up."}
+  {"shell_id": "sh_abc", "target": "dev", "status": "idle", "is_default": true, "uptime": "5m"},
+  {"shell_id": "sh_def", "target": "dev", "status": "terminated", "is_default": false,
+   "hint": "Process exited. Call shell_remove to clean up."}
 ]
 ```
 
@@ -307,40 +323,62 @@ Both are in core tools. Not merged because of token efficiency:
 
 Hermes also keeps these as separate tools (`write_file` + `patch`).
 
-## envtools Discovery
+## sandbox_env Progressive Discovery
+
+`sandbox_env` is the only management tool exposed through MCP. It uses a
+progressive discovery model to keep the default tool schema small:
+
+1. `tools/list` only describes `action="help"` and `action="status"`.
+2. `sandbox_env(action="help")` returns common management actions and pointers
+   to backend-specific help.
+3. `sandbox_env(action="docker_help")` or `sandbox_env(action="ssh_help")`
+   returns backend-specific lifecycle actions.
+4. Discovered actions are called through the same `sandbox_env(action, params)`
+   interface.
 
 ### action="help" (static, ~200 tokens)
 
 ```json
 {
-  "operations": [
+  "default_actions": [
     {
-      "action": "use",
-      "description": "设置活动目标。核心工具不传target时使用此目标",
-      "required": {"target": "string"},
-      "example": {"target": "dev"}
+      "action": "help",
+      "description": "Discover common management actions and backend help entries"
     },
     {
       "action": "status",
-      "description": "查看当前状态:活动目标、目标列表、shell列表",
-      "params": {}
+      "description": "Inspect default target, targets, and shell sessions"
+    }
+  ],
+  "operations": [
+    {
+      "action": "default_set",
+      "description": "Set default target or default shell. Pass target to set the default target. Pass shell_id to set that shell as its target's default shell.",
+      "optional": {"target": "string", "shell_id": "string"},
+      "requires": "Exactly one of target or shell_id",
+      "example": {"target": "dev", "shell_id": "sh_abc"}
     },
     {
-      "action": "shell_close",
-      "description": "关闭shell会话,终止bash进程。用于清理terminated状态的shell",
-      "required": {"shell_id": "string"}
+      "action": "shell_new",
+      "description": "Create an additional shell session on a target.",
+      "optional": {"target": "string", "purpose": "string"}
     },
     {
       "action": "shell_list",
-      "description": "列出所有shell,可选按target过滤",
+      "description": "List shell sessions, optionally filtered by target.",
       "optional": {"target": "string"}
+    },
+    {
+      "action": "shell_remove",
+      "description": "Terminate a live shell process and remove it from the registry. If already terminated, only remove the registry entry.",
+      "required": {"shell_id": "string"}
     }
   ],
   "more_help": {
-    "docker_help": "Docker: 创建/构建/提交/停止/启动/删除容器",
-    "ssh_help": "SSH: 连接/断开/重连/删除远程目标"
+    "docker_help": "Discover Docker target actions: run/build/commit/stop/start/remove",
+    "ssh_help": "Discover SSH target actions: connect/disconnect/reconnect/remove"
   },
-  "note": "核心工具(shell_send/shell_read/shell_open/read/write/patch/search)已直接暴露,支持可选target参数。"
+  "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. Target-aware tools support optional target."
 }
 ```
 
@@ -348,28 +386,35 @@ Hermes also keeps these as separate tools (`write_file` + `patch`).
 
 ```json
 {
-  "active_target": "dev",
+  "default_target": "dev",
   "targets": [
     {"name": "dev", "backend": "docker", "status": "running",
      "purpose": "Python dev", "shells": 2, "uptime": "2h15m"}
   ],
   "shells": [
-    {"shell_id": "sh_abc", "target": "dev", "status": "idle", "purpose": "default", "uptime": "5m"},
-    {"shell_id": "sh_def", "target": "dev", "status": "terminated",
-     "hint": "Process exited. Call shell_close to clean up."}
+    {"shell_id": "sh_abc", "target": "dev", "status": "idle", "purpose": "default", "is_default": true, "uptime": "5m"},
+    {"shell_id": "sh_def", "target": "dev", "status": "terminated", "is_default": false,
+     "hint": "Process exited. Call shell_remove to clean up."}
   ]
 }
 ```
 
 ### action="docker_help" (static, ~400 tokens)
 
-Operations: docker_run, docker_build, docker_commit, docker_stop,
-docker_start, docker_remove. Each with required/optional params, returns, example.
+Returns Docker operations with required/optional params, returns, and examples:
+
+```
+docker_run / docker_build / docker_commit
+docker_stop / docker_start / docker_remove
+```
 
 ### action="ssh_help" (static, ~200 tokens)
 
-Operations: ssh_connect, ssh_disconnect, ssh_reconnect, ssh_remove.
-Each with required/optional params, returns, example.
+Returns SSH operations with required/optional params, returns, and examples:
+
+```
+ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
+```
 
 ### Backend-specialized lifecycle operations
 
@@ -388,27 +433,29 @@ Error messages can be specific: "docker_stop only works on Docker targets".
 ### Agent discovery flow
 
 ```
-1. envtools(action="help")            → use + status + shell_close/list + pointers (~200 tokens)
-2. envtools(action="status")          → current targets and shells
-3. envtools(action="docker_help")     → only if Docker needed (~400 tokens)
-4. envtools(action="docker_run", ...)  → create container
-5. envtools(action="use", ...)         → set active target
-6. sandbox_shell_send(command="...")   → work with core tools
+1. sandbox_env(action="help")            → default_set + shell actions + docker_help/ssh_help pointers
+2. sandbox_env(action="status")          → current targets and shells
+3. sandbox_env(action="docker_help")     → only if Docker needed (~400 tokens)
+4. sandbox_env(action="docker_run", ...)  → create container
+5. sandbox_env(action="default_set", ...) → set default target
+6. sandbox_shell_exec(command="...")      → work with core tools
    ...
-7. envtools(action="docker_stop", ...) → stop when done
+7. sandbox_env(action="docker_stop", ...) → stop when done
 ```
 
-## Complete envtools Action List
+## Complete sandbox_env Action List
 
 ```
-Discovery:  help / status
-General:    use / shell_close / shell_list
-Docker:     docker_run / docker_build / docker_commit
-            docker_stop / docker_start / docker_remove
-SSH:        ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
+Default discovery:  help / status
+Common:             default_set
+Shell:              shell_new / shell_list / shell_remove
+Backend help:       docker_help / ssh_help
+Docker:             docker_run / docker_build / docker_commit
+                    docker_stop / docker_start / docker_remove
+SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 ```
 
-15 actions, 1 tool in tools/list. Agent loads docs on demand.
+18 actions, 1 management tool in tools/list. Agent loads docs on demand.
 
 ## Backend Implementation
 
@@ -435,13 +482,15 @@ SSH:        ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 - ssh_remove: disconnect + unregister from registry
 - No commit/build support (SSH backend only)
 
-## Hybrid Targeting Model (unchanged from v1)
+## Default Targeting Model
 
-- `envtools(action="use", params={target:"dev"})` sets active target
-- Core tools (shell_send, read, write, etc.) accept optional `target` parameter
-- If no target specified: use active target
-- If explicit target specified: use that target, don't change active target
-- If no target and no active target: error
+- `sandbox_env(action="default_set", params={target:"dev"})` sets default target
+- `sandbox_env(action="default_set", params={shell_id:"sh_abc"})` sets that shell as the default shell for its target
+- Target-aware core tools (`sandbox_shell_exec`, `sandbox_file_*`) accept optional `target` parameter
+- If no target specified: use default target
+- If explicit target specified: use that target, don't change default target
+- If no target and no default target: error
+- `sandbox_shell_exec` without `shell_id` uses the target's default shell, lazily creating one if needed
 
 ## Project Structure (updated)
 
@@ -451,7 +500,7 @@ sandbox-mcp/
 ├── target_registry.py     # Target management (name -> backend)
 ├── shell_registry.py      # Shell session management (shell_id -> ShellSession)
 ├── shell_session.py       # ShellSession: drain thread, dual markers, state machine
-├── envtools.py            # envtools action dispatch + help generation
+├── sandbox_env.py         # sandbox_env action dispatch + help generation
 ├── file_operations.py     # File ops: read/write/patch/search via shell
 ├── backends/
 │   ├── __init__.py
@@ -461,23 +510,22 @@ sandbox-mcp/
 ├── pyproject.toml
 ├── README.md
 ├── docs/
-│   ├── design-spec.md         # v1 design (superseded)
 │   ├── design-spec-v2.md      # this file
-│   └── implementation-plan.md # v1 plan (to be updated)
+│   └── implementation-plan.md # implementation plan
 └── tests/
 ```
 
-## V1 Scope (updated for v2)
+## Initial Scope
 
 ### Included
 - Docker backend: run, stop, start, remove, commit, build
 - SSH backend: connect, disconnect, reconnect, remove
-- Shell management: shell_send (wait/no-wait), shell_read, shell_open, shell_close, shell_list
+- Shell management: shell_exec (wait/no-wait), shell_read, shell_new, shell_remove, shell_list
 - Dual marker execution confirmation
 - Background drain thread with head+tail buffer
 - File operations: read, write, patch, search
-- envtools lazy discovery (3-level: help -> docker_help/ssh_help)
-- Hybrid targeting model
+- sandbox_env progressive discovery (tools/list -> help/status -> docker_help/ssh_help)
+- Default targeting model with default target/default shell
 - Output truncation (tail, configurable max_output)
 - Manual shell cleanup with shell_list hints
 
