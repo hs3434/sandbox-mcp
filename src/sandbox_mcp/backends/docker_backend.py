@@ -7,8 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from backends.base import Backend, TargetInfo
-from shell_session import ShellSession
+from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.shell_session import ShellSession
 
 
 def _run(cmd, timeout=30, check=False):

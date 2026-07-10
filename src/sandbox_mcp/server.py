@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 import logging
 
-from backends.docker_backend import DockerBackend
-from backends.ssh_backend import SSHBackend
-from file_operations import FileOperations
-from sandbox_env import SandboxEnv
-from shell_registry import ShellRegistry
-from target_registry import TargetRegistry
+from sandbox_mcp.backends.docker_backend import DockerBackend
+from sandbox_mcp.backends.ssh_backend import SSHBackend
+from sandbox_mcp.file_operations import FileOperations
+from sandbox_mcp.sandbox_env import SandboxEnv
+from sandbox_mcp.shell_registry import ShellRegistry
+from sandbox_mcp.target_registry import TargetRegistry
 
 logger = logging.getLogger(__name__)
 

@@ -268,7 +268,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_commit only supported on Docker targets"}
         return backend.commit(target, params.get("image_tag"))
@@ -279,7 +279,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_stop only supported on Docker targets"}
         self._shells.close_all_for_target(target)
@@ -292,7 +292,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_start only supported on Docker targets"}
         info = backend.start(target)
@@ -304,7 +304,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_remove only supported on Docker targets"}
         self._shells.close_all_for_target(target)
@@ -334,7 +334,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_disconnect only supported on SSH targets"}
         self._shells.close_all_for_target(target)
@@ -347,7 +347,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_reconnect only supported on SSH targets"}
         info = backend.start(target)
@@ -359,7 +359,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_remove only supported on SSH targets"}
         self._shells.close_all_for_target(target)

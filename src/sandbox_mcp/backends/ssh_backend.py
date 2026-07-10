@@ -6,8 +6,8 @@ import shutil
 import subprocess
 import time
 
-from backends.base import Backend, TargetInfo
-from shell_session import ShellSession
+from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.shell_session import ShellSession
 
 
 def _find_ssh():

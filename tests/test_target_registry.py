@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from target_registry import TargetRegistry
+from sandbox_mcp.target_registry import TargetRegistry
 
 
 def test_register_target():

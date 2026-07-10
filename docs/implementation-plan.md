@@ -16,18 +16,21 @@
 
 ```
 sandbox-mcp/
-├── pyproject.toml              # Package metadata + dependencies
-├── server.py                   # MCP server entry + 8 tool definitions + dispatch
-├── target_registry.py          # Target management (name -> backend)
-├── shell_registry.py           # Shell session management (shell_id -> ShellSession)
-├── shell_session.py            # ShellSession: drain thread, dual markers, state machine
-├── sandbox_env.py             # sandbox_env action dispatch + help generation
-├── file_operations.py          # File ops: read/write/patch/search via shell
-├── backends/
-│   ├── __init__.py
-│   ├── base.py                 # Abstract Backend interface
-│   ├── docker_backend.py       # Docker: run/build/commit/stop/start/remove
-│   └── ssh_backend.py          # SSH: connect/disconnect/reconnect/remove
+├── pyproject.toml              # Package metadata + dependencies (src layout)
+├── src/
+│   └── sandbox_mcp/
+│       ├── __init__.py
+│       ├── server.py                   # MCP server entry + 7 tool definitions + dispatch
+│       ├── target_registry.py          # Target management (name -> backend)
+│       ├── shell_registry.py           # Shell session management (shell_id -> ShellSession)
+│       ├── shell_session.py            # ShellSession: drain thread, dual markers, state machine
+│       ├── sandbox_env.py             # sandbox_env action dispatch + help generation
+│       ├── file_operations.py          # File ops: read/write/patch/search via shell
+│       └── backends/
+│           ├── __init__.py
+│           ├── base.py                 # Abstract Backend interface
+│           ├── docker_backend.py       # Docker: run/build/commit/stop/start/remove
+│           └── ssh_backend.py          # SSH: connect/disconnect/reconnect/remove (key auth only)
 ├── tests/
 │   ├── conftest.py
 │   ├── test_shell_session.py
@@ -44,6 +47,9 @@ sandbox-mcp/
     ├── design-spec-v2.md       # current design
     └── implementation-plan.md  # this file
 ```
+
+All modules are imported as `from sandbox_mcp.X import Y`; the package name
+(no underscore) avoids colliding with PyPI's common `server` namespace.
 
 ---
 
@@ -82,10 +88,11 @@ dev = [
 ]
 
 [project.scripts]
-sandbox-mcp = "server:main"
+sandbox-mcp = "sandbox_mcp.server:main"
 
 [tool.setuptools]
-py-modules = ["server", "target_registry", "shell_registry", "shell_session", "sandbox_env", "file_operations"]
+[tool.setuptools.packages.find]
+where = ["src"]
 packages = ["backends"]
 
 [tool.pytest.ini_options]
@@ -167,7 +174,7 @@ ShellSession wraps a persistent bash process with:
 # tests/test_shell_session.py
 import time
 import pytest
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 def test_send_wait_true_simple_command():
@@ -619,7 +626,7 @@ git commit -m "feat: ShellSession with dual markers, drain thread, and state mac
 ```python
 # tests/test_backends_base.py
 import pytest
-from backends.base import Backend, TargetInfo
+from sandbox_mcp.backends.base import Backend, TargetInfo
 
 
 def test_target_info_dataclass():
@@ -650,7 +657,7 @@ pytest tests/test_backends_base.py -v
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 @dataclass
@@ -734,7 +741,7 @@ Docker backend implements: create (docker_run), stop (docker_stop), start
 # tests/test_docker_backend.py
 import pytest
 from unittest.mock import patch, MagicMock
-from backends.docker_backend import DockerBackend
+from sandbox_mcp.backends.docker_backend import DockerBackend
 
 
 @pytest.fixture
@@ -836,8 +843,8 @@ import tempfile
 import time
 from typing import Optional
 
-from backends.base import Backend, TargetInfo
-from shell_session import ShellSession
+from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.shell_session import ShellSession
 
 
 def _find_docker() -> str:
@@ -981,7 +988,7 @@ multiplexing.
 # tests/test_ssh_backend.py
 import pytest
 from unittest.mock import patch, MagicMock
-from backends.ssh_backend import SSHBackend
+from sandbox_mcp.backends.ssh_backend import SSHBackend
 
 
 @pytest.fixture
@@ -1049,8 +1056,8 @@ import subprocess
 import time
 from typing import Optional
 
-from backends.base import Backend, TargetInfo
-from shell_session import ShellSession
+from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.shell_session import ShellSession
 
 
 def _find_ssh() -> str:
@@ -1201,7 +1208,7 @@ Manages name -> backend mapping, target metadata, default target, and explicit t
 # tests/test_target_registry.py
 import pytest
 from unittest.mock import MagicMock
-from target_registry import TargetRegistry
+from sandbox_mcp.target_registry import TargetRegistry
 
 
 def test_register_target():
@@ -1308,7 +1315,7 @@ Tracks shell sessions, per-target default shells, terminated state handling, and
 # tests/test_shell_registry.py
 import pytest
 from unittest.mock import MagicMock
-from shell_registry import ShellRegistry
+from sandbox_mcp.shell_registry import ShellRegistry
 
 
 def test_open_shell():
@@ -1409,7 +1416,7 @@ pytest tests/test_shell_registry.py -v
 
 import uuid
 from typing import Optional, Callable
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 class ShellRegistry:
@@ -1528,7 +1535,7 @@ File operations execute shell commands on targets via backend.
 # tests/test_file_operations.py
 import pytest
 from unittest.mock import MagicMock
-from file_operations import FileOperations
+from sandbox_mcp.file_operations import FileOperations
 
 
 @pytest.fixture
@@ -1906,7 +1913,7 @@ sandbox_env implements 18 actions with progressive discovery:
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from sandbox_env import SandboxEnv
+from sandbox_mcp.sandbox_env import SandboxEnv
 
 
 @pytest.fixture
@@ -2304,7 +2311,7 @@ class SandboxEnv:
         ok, err = self._require(params, "target")
         if err:
             return {"error": err}
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
         if not isinstance(backend, DockerBackend):
@@ -2317,7 +2324,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_stop only supported on Docker targets"}
         self._shells.close_all_for_target(target)
@@ -2330,7 +2337,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_start only supported on Docker targets"}
         info = backend.start(target)
@@ -2342,7 +2349,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.docker_backend import DockerBackend
+        from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_remove only supported on Docker targets"}
         self._shells.close_all_for_target(target)
@@ -2372,7 +2379,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_disconnect only supported on SSH targets"}
         self._shells.close_all_for_target(target)
@@ -2385,7 +2392,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_reconnect only supported on SSH targets"}
         info = backend.start(target)
@@ -2397,7 +2404,7 @@ class SandboxEnv:
             return {"error": err}
         target = self._targets.resolve_target(params["target"])
         backend = self._targets.get_backend(target)
-        from backends.ssh_backend import SSHBackend
+        from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_remove only supported on SSH targets"}
         self._shells.close_all_for_target(target)
@@ -2439,7 +2446,7 @@ and sandbox_env. Dispatches to ShellSession, FileOperations, or SandboxEnv.
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from server import SandboxServer
+from sandbox_mcp.server import SandboxServer
 
 
 @pytest.fixture
@@ -2496,12 +2503,12 @@ import json
 import logging
 from typing import Any
 
-from target_registry import TargetRegistry
-from shell_registry import ShellRegistry
-from file_operations import FileOperations
-from sandbox_env import SandboxEnv
-from backends.docker_backend import DockerBackend
-from backends.ssh_backend import SSHBackend
+from sandbox_mcp.target_registry import TargetRegistry
+from sandbox_mcp.shell_registry import ShellRegistry
+from sandbox_mcp.file_operations import FileOperations
+from sandbox_mcp.sandbox_env import SandboxEnv
+from sandbox_mcp.backends.docker_backend import DockerBackend
+from sandbox_mcp.backends.ssh_backend import SSHBackend
 
 logger = logging.getLogger(__name__)
 
@@ -2796,7 +2803,7 @@ git commit -m "feat: SandboxServer with 7 tools and sandbox_env dispatch"
 import pytest
 import json
 import shutil
-from server import SandboxServer
+from sandbox_mcp.server import SandboxServer
 
 pytestmark = pytest.mark.skipif(
     not shutil.which("docker"),

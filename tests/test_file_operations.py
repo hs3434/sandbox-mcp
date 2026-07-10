@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from file_operations import FileOperations
+from sandbox_mcp.file_operations import FileOperations
 
 
 @pytest.fixture

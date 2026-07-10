@@ -1,6 +1,6 @@
 import pytest
 
-from backends.base import Backend, TargetInfo
+from sandbox_mcp.backends.base import Backend, TargetInfo
 
 
 def test_target_info_dataclass():

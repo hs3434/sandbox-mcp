@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backends.ssh_backend import SSHBackend
+from sandbox_mcp.backends.ssh_backend import SSHBackend
 
 
 @pytest.fixture

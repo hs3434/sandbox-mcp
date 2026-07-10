@@ -22,11 +22,10 @@ dev = [
 ]
 
 [project.scripts]
-sandbox-mcp = "server:main"
+sandbox-mcp = "sandbox_mcp.server:main"
 
-[tool.setuptools]
-py-modules = ["server", "target_registry", "shell_registry", "shell_session", "sandbox_env", "file_operations"]
-packages = ["backends"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

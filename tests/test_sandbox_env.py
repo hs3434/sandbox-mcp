@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sandbox_env import SandboxEnv
+from sandbox_mcp.sandbox_env import SandboxEnv
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 class ShellRegistry:

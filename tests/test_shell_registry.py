@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from shell_registry import ShellRegistry
+from sandbox_mcp.shell_registry import ShellRegistry
 
 
 def test_open_shell():

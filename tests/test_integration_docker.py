@@ -3,7 +3,7 @@ import shutil
 
 import pytest
 
-from server import SandboxServer
+from sandbox_mcp.server import SandboxServer
 
 pytestmark = pytest.mark.skipif(
     not shutil.which("docker"),

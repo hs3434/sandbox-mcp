@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 @dataclass

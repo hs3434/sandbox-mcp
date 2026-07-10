@@ -3,12 +3,12 @@ from unittest.mock import patch
 
 import pytest
 
-from server import SandboxServer
+from sandbox_mcp.server import SandboxServer
 
 
 @pytest.fixture
 def server():
-    with patch("server.DockerBackend"), patch("server.SSHBackend"):
+    with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
         return SandboxServer()
 
 

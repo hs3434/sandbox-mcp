@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backends.docker_backend import DockerBackend
+from sandbox_mcp.backends.docker_backend import DockerBackend
 
 
 @pytest.fixture

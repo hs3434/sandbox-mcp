@@ -1,6 +1,6 @@
 import time
 
-from shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession
 
 
 def test_send_wait_true_simple_command():
