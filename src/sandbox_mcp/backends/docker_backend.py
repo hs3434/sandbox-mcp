@@ -324,8 +324,7 @@ class DockerBackend(Backend):
         process = DockerExecProcess(container, ["bash"])
         return ShellSession(process=process)
 
-    def exec_oneoff(self, name: str, command: str, timeout: int = 30,
-                    stdin_data: str | None = None) -> dict:
+    def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
         container_name = self._container_name(name)
         try:
             container = self._ensure_client().containers.get(container_name)
@@ -342,3 +341,70 @@ class DockerBackend(Backend):
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
         return {"exit_code": exit_code, "output": output or "", "stderr": ""}
+
+    def write_file(self, name: str, path: str, content: bytes) -> dict:
+        """Write content via Docker's ``put_archive`` + atomic rename.
+
+        ``put_archive`` extracts a tar into a temp directory inside the
+        target; the final ``mv`` makes the swap atomic on the container
+        filesystem. No shell quoting, no ARG_MAX, no base64.
+        """
+        import io
+        import tarfile
+        import uuid
+
+        container_name = self._container_name(name)
+        try:
+            container = self._ensure_client().containers.get(container_name)
+        except NotFound:
+            return {"status": "error", "error": "container not found"}
+
+        # Ensure parent directory exists.
+        parent = os.path.dirname(path) or "/"
+        if parent != "/":
+            mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
+            if mkdir.get("exit_code") not in (0, None):
+                return {"status": "error", "stage": "mkdir",
+                        "error": mkdir.get("stderr") or "mkdir failed"}
+
+        # Build a tar archive in memory containing the file.
+        buf = io.BytesIO()
+        filename = os.path.basename(path)
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            info = tarfile.TarInfo(name=filename)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+        tar_bytes = buf.getvalue()
+
+        # Stage the tar into a temp directory in the target. put_archive
+        # requires the destination directory to exist.
+        tmp_dir = f"/tmp/.sandbox-mcp-write-{uuid.uuid4().hex[:8]}"
+        mkdir_tmp = self.exec_oneoff(name, f"mkdir -p {shlex.quote(tmp_dir)}")
+        if mkdir_tmp.get("exit_code") not in (0, None):
+            return {"status": "error", "stage": "mkdir_tmp",
+                    "error": mkdir_tmp.get("stderr") or "mkdir failed"}
+
+        try:
+            ok = container.put_archive(tmp_dir, tar_bytes)
+        except APIError as e:
+            self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
+            return {"status": "error", "stage": "put_archive",
+                    "error": str(e.explanation or e)}
+        if not ok:
+            self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
+            return {"status": "error", "stage": "put_archive",
+                    "error": "put_archive returned False"}
+
+        # Atomic rename onto the target path.
+        rename = self.exec_oneoff(
+            name,
+            f"mv -f {shlex.quote(tmp_dir + '/' + filename)} {shlex.quote(path)}",
+        )
+        # Best-effort cleanup of the temp directory.
+        self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
+        if rename.get("exit_code") not in (0, None):
+            return {"status": "error", "stage": "rename",
+                    "error": rename.get("stderr") or "rename failed"}
+
+        return {"status": "ok", "path": path,
+                "bytes_written": len(content)}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -137,11 +139,10 @@ class SSHBackend(Backend):
     def open_shell(self, name):
         return ShellSession([*self._ssh_base_args(name), "bash"])
 
-    def exec_oneoff(self, name, command, timeout=30, stdin_data=None):
+    def exec_oneoff(self, name, command, timeout=30):
         try:
             result = subprocess.run(
                 [*self._ssh_base_args(name), "bash", "-c", command],
-                input=stdin_data,
                 capture_output=True, text=True, timeout=timeout,
             )
             return {"exit_code": result.returncode,
@@ -149,3 +150,38 @@ class SSHBackend(Backend):
                     "stderr": result.stderr or ""}
         except subprocess.TimeoutExpired:
             return {"exit_code": None, "output": "", "stderr": "timeout"}
+
+    def write_file(self, name, path, content):
+        """Atomic write via base64-over-stdin + mv.
+
+        The SSH backend has no native file-copy API, so we use the
+        shell's stdin to pipe content past the command-line ARG_MAX
+        limit. ``subprocess.run(input=...)`` handles the stdin pipe
+        transparently.
+        """
+        import base64
+        import uuid
+
+        parent = os.path.dirname(path) or "/"
+        if parent != "/":
+            mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
+            if mkdir.get("exit_code") not in (0, None):
+                return {"status": "error", "stage": "mkdir",
+                        "error": mkdir.get("stderr") or "mkdir failed"}
+
+        tmp_dir = f"/tmp/.sandbox-mcp-write-{uuid.uuid4().hex[:8]}"
+        encoded = base64.b64encode(content).decode("ascii")
+        filename = os.path.basename(path)
+        cmd = (
+            "set -e; "
+            f"d={shlex.quote(tmp_dir)}; "
+            'mkdir -p "$d"; '
+            f"echo {shlex.quote(encoded)} | base64 -d > \"$d/{shlex.quote(filename)}\"; "
+            f"mv -f \"$d/{shlex.quote(filename)}\" {shlex.quote(path)}; "
+            'rm -rf "$d"'
+        )
+        result = self.exec_oneoff(name, cmd, timeout=60)
+        if result.get("exit_code") not in (0, None):
+            return {"status": "error", "stage": "write",
+                    "error": result.get("stderr") or "write failed"}
+        return {"status": "ok", "path": path, "bytes_written": len(content)}

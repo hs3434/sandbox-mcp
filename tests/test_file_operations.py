@@ -1,4 +1,3 @@
-import base64
 from unittest.mock import MagicMock
 
 import pytest
@@ -102,9 +101,9 @@ def test_write_fails_on_invalid_json_content(fops, backend):
 
 
 def test_write_succeeds_on_valid_json(fops, backend):
+    backend.write_file.return_value = {"status": "ok", "bytes_written": 8}
     backend.exec_oneoff.side_effect = [
         {"exit_code": 1, "output": "", "stderr": ""},  # cat pre-content (none)
-        {"exit_code": 0, "output": "", "stderr": ""},  # atomic_write
         {"exit_code": 0, "output": '{"a": 1}\n', "stderr": ""},  # verify
         {"exit_code": 0, "output": "8\n", "stderr": ""},  # wc -c
     ]
@@ -113,31 +112,28 @@ def test_write_succeeds_on_valid_json(fops, backend):
     assert result["bytes_written"] == 8
 
 
-def test_write_atomic_write_uses_stdin(fops, backend):
-    """The atomic-write script must be piped base64 over stdin."""
+def test_write_atomic_write_calls_backend_write_file(fops, backend):
+    """The write path uses backend.write_file, not exec_oneoff, for content."""
+    backend.write_file.return_value = {"status": "ok", "bytes_written": 6}
+    # Only the post-write verify (cat) and bytes (wc -c) calls go through
+    # exec_oneff. write_file is the new transport.
     backend.exec_oneoff.side_effect = [
-        {"exit_code": 1, "output": "", "stderr": ""},  # cat
-        {"exit_code": 0, "output": "", "stderr": ""},  # atomic_write
         {"exit_code": 0, "output": "hello\n", "stderr": ""},  # verify
-        {"exit_code": 0, "output": "6\n", "stderr": ""},  # wc -c
+        {"exit_code": 0, "output": "6\n", "stderr": ""},       # wc -c
     ]
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
-    write_call = backend.exec_oneoff.call_args_list[1]
-    cmd = write_call.args[1]
-    assert "base64 -d" in cmd
-    assert "mktemp" in cmd
-    assert "mv -f" in cmd
-    # The base64 payload is inlined in the command via echo.
-    encoded = base64.b64encode(b"hello\n").decode("ascii")
-    assert encoded in cmd
+    backend.write_file.assert_called_once()
+    call_args = backend.write_file.call_args
+    assert call_args.args[0] == "dev"
+    assert call_args.args[1] == "/tmp/x.txt"
+    assert call_args.args[2] == b"hello\n"
 
 
 def test_write_post_write_verify_detects_mismatch(fops, backend):
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 1, "output": "", "stderr": ""},  # cat (none)
-        {"exit_code": 0, "output": "", "stderr": ""},  # atomic_write
-        {"exit_code": 0, "output": "WRONG\n", "stderr": ""},  # verify mismatch
-    ]
+    backend.write_file.return_value = {"status": "ok", "bytes_written": 9}
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0, "output": "WRONG\n", "stderr": "",
+    }
     result = fops.write("/tmp/x.txt", "expected\n", machine="dev")
     assert result["status"] == "error"
     assert result["stage"] == "verify"
@@ -145,48 +141,49 @@ def test_write_post_write_verify_detects_mismatch(fops, backend):
 
 def test_write_preserves_crlf_when_target_has_it(fops, backend):
     """If the on-disk file uses CRLF, new content is normalized to CRLF."""
+    backend.write_file.return_value = {"status": "ok", "bytes_written": 16}
     backend.exec_oneoff.side_effect = [
         {"exit_code": 0, "output": "old\r\nline\r\n", "stderr": ""},  # cat pre
-        {"exit_code": 0, "output": "", "stderr": ""},                # atomic_write
         {"exit_code": 0, "output": "old\r\nnew\r\n", "stderr": ""},  # verify
-        {"exit_code": 0, "output": "16\n", "stderr": ""},             # wc -c
     ]
     fops.write("/tmp/x.txt", "old\nnew\n", machine="dev")
-    cmd = backend.exec_oneoff.call_args_list[1].args[1]
-    expected_b64 = base64.b64encode(b"old\r\nnew\r\n").decode("ascii")
-    assert expected_b64 in cmd
+    # Verify the bytes handed to write_file are CRLF-encoded.
+    write_call = backend.write_file.call_args
+    assert write_call.args[0] == "dev"
+    assert write_call.args[1] == "/tmp/x.txt"
+    assert write_call.args[2].startswith(b"old\r\nnew\r\n")
 
 
 def test_write_preserves_bom_when_target_has_it(fops, backend):
+    backend.write_file.return_value = {"status": "ok", "bytes_written": 6}
     backend.exec_oneoff.side_effect = [
         {"exit_code": 0, "output": "\ufeffhello\n", "stderr": ""},  # cat with BOM
-        {"exit_code": 0, "output": "", "stderr": ""},                # atomic_write
         {"exit_code": 0, "output": "\ufeffhello\n", "stderr": ""},   # verify
-        {"exit_code": 0, "output": "6\n", "stderr": ""},             # wc -c
     ]
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
-    cmd = backend.exec_oneoff.call_args_list[1].args[1]
-    assert base64.b64encode(b"\xef\xbb\xbfhello\n").decode("ascii") in cmd
+    # Verify BOM is prepended in the bytes handed to write_file.
+    write_bytes = backend.write_file.call_args.args[2]
+    assert write_bytes.startswith(b"\xef\xbb\xbf")
 
 
 # ---- patch ----
 
-def _patch_sequence(initial_file, post_file):
-    """Return a side_effect for patch tests with explicit pre/post file.
-
-    patch_replace calls cat → atomic_write → cat (verify).
+def _patch_setup(backend, initial_file, post_file):
+    """Configure a backend to return ``initial_file`` on cat, succeed on
+    write_file, and return ``post_file`` on the post-write verify cat.
     """
-    return [
+    backend.exec_oneoff.side_effect = [
+        # initial cat
         {"exit_code": 0, "output": initial_file, "stderr": ""},
-        {"exit_code": 0, "output": "", "stderr": ""},
+        # post-write verify cat
         {"exit_code": 0, "output": post_file, "stderr": ""},
     ]
+    backend.write_file.return_value = {"status": "ok"}
 
 
 def test_patch_replace_mode_replaces_unique_string(fops, backend):
     initial = "alpha\nbeta\ngamma\n"
-    backend.exec_oneoff.side_effect = _patch_sequence(
-        initial, "alpha\nBETA\ngamma\n")
+    _patch_setup(backend, initial, "alpha\nBETA\ngamma\n")
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="beta", new_string="BETA")
     assert result["status"] == "ok"
@@ -195,7 +192,7 @@ def test_patch_replace_mode_replaces_unique_string(fops, backend):
 
 def test_patch_replace_mode_returns_diff(fops, backend):
     initial = "a\nb\nc\n"
-    backend.exec_oneoff.side_effect = _patch_sequence(initial, "a\nB\nc\n")
+    _patch_setup(backend, initial, "a\nB\nc\n")
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="b", new_string="B")
     assert "diff" in result
@@ -205,7 +202,7 @@ def test_patch_replace_mode_returns_diff(fops, backend):
 
 def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
     initial = "x\nx\nx\n"
-    backend.exec_oneoff.side_effect = _patch_sequence(initial, initial)
+    _patch_setup(backend, initial, initial)
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="x", new_string="y")
     assert result["status"] == "error"
@@ -214,7 +211,7 @@ def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
 
 def test_patch_replace_mode_fuzzy_match(fops, backend):
     initial = "hello world\n"
-    backend.exec_oneoff.side_effect = _patch_sequence(initial, initial)
+    _patch_setup(backend, initial, initial)
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="helo world", new_string="hello world",
                        replace_all=False)
@@ -226,15 +223,13 @@ def test_patch_replace_mode_normalizes_crlf(fops, backend):
     """A patch sent with LF matches against CRLF on disk and writes CRLF."""
     initial = "alpha\r\nbeta\r\ngamma\r\n"
     expected_after = "alpha\r\nBETA\r\ngamma\r\n"
-    backend.exec_oneoff.side_effect = _patch_sequence(
-        initial, expected_after)
+    _patch_setup(backend, initial, expected_after)
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="beta", new_string="BETA")
     assert result["status"] == "ok"
-    cmd = backend.exec_oneoff.call_args_list[1].args[1]
-    # The atomic_write command should contain the base64-encoded CRLF content.
-    expected_b64 = base64.b64encode(b"alpha\r\nBETA\r\ngamma\r\n").decode("ascii")
-    assert expected_b64 in cmd
+    # Verify the bytes handed to write_file are CRLF-encoded.
+    write_bytes = backend.write_file.call_args.args[2]
+    assert b"\r\n" in write_bytes
 
 
 def test_patch_apply_mode(fops, backend):

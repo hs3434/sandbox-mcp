@@ -31,7 +31,6 @@ import json as _json
 import os
 import re
 import shlex
-import uuid
 
 from sandbox_mcp.safety import check_path_safety
 
@@ -199,31 +198,15 @@ def _is_image(path: str) -> bool:
 
 # ---- Atomic write ---------------------------------------------------------
 
-def _atomic_write(backend, machine: str, path: str, content_b64: str) -> dict:
-    """Stage content via base64 into a temp file in the target dir, then mv.
+def _atomic_write(backend, machine: str, path: str, content: bytes) -> dict:
+    """Write content to the target file via the backend's write_file hook.
 
-    The content is embedded in the shell command string (not passed over
-    stdin) because base64's character set is fully safe for single-quoted
-    shell arguments: ``A-Za-z0-9+/=``.
+    For Docker, the backend uses ``put_archive`` (no shell quoting, no
+    ARG_MAX). For SSH, the backend pipes base64 over stdin. The backend
+    is responsible for atomicity (staging a temp file then ``mv``-ing
+    into place).
     """
-    q_path = shlex.quote(path)
-    parent = os.path.dirname(path) or "."
-    q_parent = shlex.quote(parent)
-    tmp_tmpl = shlex.quote(f".sandbox-mcp-tmp.XXXXXX.{uuid.uuid4().hex[:8]}")
-    q_content = shlex.quote(content_b64)
-    script = (
-        "set -e; "
-        f"d={q_parent}; "
-        f"t={q_path}; "
-        f'tmp=$(mktemp -p "$d" {tmp_tmpl} 2>/dev/null || '
-        f'(tmp="$d/.sandbox-mcp-tmp.$$"; : > "$tmp"; echo "$tmp")); '
-        '[ -n "$tmp" ] || { echo "atomic write: could not create temp file" >&2; exit 1; }; '
-        'trap \'rm -f "$tmp"\' EXIT; '
-        f"echo {q_content} | base64 -d > \"$tmp\"; "
-        'mv -f "$tmp" "$t"; '
-        "trap - EXIT"
-    )
-    return backend.exec_oneoff(machine, script)
+    return backend.write_file(machine, path, content)
 
 
 # ---- Unified diff ----------------------------------------------------------
@@ -413,15 +396,14 @@ class FileOperations:
         if has_pre_bom and not content_to_write.startswith("\ufeff"):
             content_to_write = "\ufeff" + content_to_write
 
-        # Encode via base64 over stdin to avoid shell ARG_MAX and
-        # bypass any quoting issues.
-        encoded = base64.b64encode(
-            content_to_write.encode("utf-8")).decode("ascii")
-
-        write_result = _atomic_write(self._backend, machine, path, encoded)
-        if write_result.get("exit_code") not in (0, None):
+        # Backend.write_file handles atomicity and transport (Docker's
+        # put_archive, or base64-over-stdin for SSH).
+        write_bytes = content_to_write.encode("utf-8")
+        write_result = _atomic_write(self._backend, machine, path, write_bytes)
+        if write_result.get("status") != "ok":
             return {"status": "error", "stage": "write",
-                    "error": (write_result.get("stderr")
+                    "error": (write_result.get("error")
+                              or write_result.get("stderr")
                               or write_result.get("output")
                               or "atomic write failed")}
 
@@ -442,12 +424,8 @@ class FileOperations:
             ok, err = linter(content)
             lint_summary = {"ok": ok, "error": err if err != "__SKIP__" else None}
 
-        # bytes written
-        stat = self._backend.exec_oneoff(machine, f"wc -c < {shlex.quote(path)}")
-        try:
-            bytes_written = int(stat.get("output", "").strip())
-        except ValueError:
-            bytes_written = len(content_to_write.encode("utf-8"))
+        # bytes written (returned by backend or fall back to content length)
+        bytes_written = write_result.get("bytes_written", len(write_bytes))
 
         result = {"status": "ok", "path": path,
                    "bytes_written": bytes_written,
@@ -499,18 +477,21 @@ class FileOperations:
         replaced = original.replace(old_norm, new_norm)
         diff = _unified_diff(original, replaced, path)
 
-        encoded = base64.b64encode(
-            _strip_bom(replaced)[0].encode("utf-8")
-             + (b"\r\n" if ending == "\r\n" else b"\n")
-             * (0 if replaced.endswith("\n") else 1)).decode("ascii")
-        # Simpler: just re-encode replaced text preserving detected ending.
-        encoded = base64.b64encode(replaced.encode("utf-8")).decode("ascii")
-        # Atomic write including BOM if the original had one.
+        # Restore BOM if the original had one and preserve the detected
+        # line ending.
         full_content = ("\ufeff" if original_bom else "") + replaced
-        encoded = base64.b64encode(full_content.encode("utf-8")).decode("ascii")
-        write_result = _atomic_write(self._backend, machine, path, encoded)
-        if write_result.get("exit_code") not in (0, None):
-            return {"status": "error", "error": "write failed after patch"}
+        if ending == "\r\n" and not full_content.endswith("\r\n"):
+            full_content += "\r\n"
+        elif ending == "\n" and not full_content.endswith("\n"):
+            full_content += "\n"
+
+        write_bytes = full_content.encode("utf-8")
+        write_result = _atomic_write(self._backend, machine, path, write_bytes)
+        if write_result.get("status") != "ok":
+            return {"status": "error", "stage": "write",
+                    "error": (write_result.get("error")
+                              or write_result.get("output")
+                              or "patch write failed")}
 
         # Post-write verification.
         verify = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")

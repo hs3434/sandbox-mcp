@@ -45,13 +45,18 @@ class Backend(ABC):
         """Open a new persistent shell on the target."""
 
     @abstractmethod
-    def exec_oneoff(self, name: str, command: str, timeout: int = 30,
-                    stdin_data: str | None = None) -> dict:
-        """Execute a one-off command (no persistent shell).
+    def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
+        """Execute a one-off command (no persistent shell)."""
 
-        ``stdin_data`` is piped to the process's stdin instead of
-        embedding in the command string. Used by the file_ops atomic
-        write path to bypass shell ARG_MAX limits.
+    @abstractmethod
+    def write_file(self, name: str, path: str, content: bytes) -> dict:
+        """Write ``content`` (raw bytes) atomically to ``path`` on the target.
+
+        Backends that have a native file-copy API (e.g. Docker's
+        ``put_archive``) should use it; others can stage a temp file via
+        ``exec_oneoff`` and ``mv`` it into place. Implementations must
+        ensure that a crash mid-write leaves the existing target file
+        untouched.
         """
 
     def suggest_paths(self, name: str, missing_path: str) -> list:
