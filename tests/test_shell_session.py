@@ -97,10 +97,18 @@ def test_terminated_on_bash_exit():
 
 
 def test_output_truncation():
-    """Truncation of large output when max_output is exceeded.
-    Temporarily disabled for CI investigation - see #CI-FLAKE.
-    """
-    pass
+    """Truncation works when output exceeds max_output."""
+    session = ShellSession(["bash"])
+    # echo hello world is ~12 bytes — force truncation with max_output=1.
+    result = session.send(
+        "echo hello world",
+        wait=True,
+        timeout=5,
+        max_output=1,
+    )
+    assert result["status"] == "completed"
+    assert "truncated" in result["output"].lower()
+    session.close()
 
 
 #    session = ShellSession(["bash"])
