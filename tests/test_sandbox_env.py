@@ -40,6 +40,8 @@ def test_docker_help_returns_docker_ops(sandbox_env):
     assert "docker_stop" in actions
     assert "docker_start" in actions
     assert "docker_remove" in actions
+    assert "docker_ps" in actions
+    assert "docker_images" in actions
 
 
 def test_ssh_help_returns_ssh_ops(sandbox_env):
@@ -147,3 +149,23 @@ def test_unknown_action_returns_error(sandbox_env):
 def test_missing_required_param_returns_error(sandbox_env):
     result = sandbox_env.dispatch("docker_run", {"name": "dev"})
     assert "error" in result
+
+
+def test_docker_ps_returns_container_list(sandbox_env):
+    sandbox_env._docker.list_containers.return_value = [
+        {"name": "sandbox-dev", "status": "running", "image": "python:3.12",
+         "created": "2025-01-01T00:00:00Z"},
+    ]
+    result = sandbox_env.dispatch("docker_ps", {"name_prefix": "sandbox-"})
+    assert "containers" in result
+    assert result["containers"][0]["name"] == "sandbox-dev"
+
+
+def test_docker_images_returns_images(sandbox_env):
+    sandbox_env._docker.list_images.return_value = [
+        {"tag": "python:3.12", "image_id": "sha256:abc", "created": "",
+         "size_mb": 120.5},
+    ]
+    result = sandbox_env.dispatch("docker_images", {})
+    assert "images" in result
+    assert result["images"][0]["tag"] == "python:3.12"

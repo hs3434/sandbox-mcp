@@ -313,14 +313,64 @@ class DockerBackend(Backend):
             if line.strip()
         ]
 
+    # ---- discovery (direct daemon queries, no MachineRegistry) ----
+
+    def list_containers(self, name_prefix: str = "") -> list[dict]:
+        """Query all containers from the daemon, optionally filtered by name prefix.
+
+        Returns list of dicts (name, status, image, created) sorted by creation
+        time descending. This works even when the MachineRegistry is empty
+        (e.g., after an MCP restart).
+        """
+        try:
+            containers = self._ensure_client().containers.list(all=True)
+        except APIError:
+            return []
+        result = []
+        for c in containers:
+            name = c.name
+            if name_prefix and not name.startswith(name_prefix):
+                continue
+            state = c.attrs.get("State", {})
+            result.append({
+                "name": name,
+                "status": state.get("Status", "unknown"),
+                "image": c.image.tags[0] if c.image.tags else (c.image.short_id or "unknown"),
+                "created": c.attrs.get("Created", ""),
+            })
+        result.sort(key=lambda x: x["created"], reverse=True)
+        return result
+
+    def list_images(self) -> list[dict]:
+        """Query all images from the daemon.
+
+        Returns list of dicts (repo:tag, image_id, created, size_mb). Useful
+        for the agent to discover what images are available for ``docker_run``.
+        """
+        try:
+            images = self._ensure_client().images.list(all=True)
+        except APIError:
+            return []
+        result = []
+        for img in images:
+            tags = img.tags if img.tags else [f"<none>:{img.short_id}"]
+            for tag in tags:
+                result.append({
+                    "tag": tag,
+                    "image_id": img.short_id,
+                    "created": img.attrs.get("Created", ""),
+                    "size_mb": round(img.attrs.get("Size", 0) / (1024 * 1024), 1),
+                })
+        return result
+
     # ---- shell / exec ----
 
     def open_shell(self, name: str) -> ShellSession:
         container_name = self._container_name(name)
         try:
             container = self._ensure_client().containers.get(container_name)
-        except NotFound:
-            raise RuntimeError(f"Container {container_name} not found")
+        except NotFound as e:
+            raise RuntimeError(f"Container {container_name} not found") from e
         process = DockerExecProcess(container, ["bash"])
         return ShellSession(process=process)
 

@@ -43,6 +43,7 @@ Hermes Gateway (host process)
                     ├── action=docker_help
                     │     └── docker_run / docker_build / docker_commit
                     │         docker_stop / docker_start / docker_remove
+                    │         docker_ps / docker_images
                     └── action=ssh_help
                           └── ssh_connect / ssh_disconnect / ssh_reconnect
                               ssh_remove
@@ -409,7 +410,7 @@ Returns Docker operations with required/optional params, returns, and examples:
 
 ```
 docker_run / docker_build / docker_commit
-docker_stop / docker_start / docker_remove
+docker_stop / docker_start / docker_remove / docker_ps / docker_images
 ```
 
 ### action="ssh_help" (static, ~200 tokens)
@@ -456,6 +457,7 @@ Shell:              shell_new / shell_list / shell_remove
 Backend help:       docker_help / ssh_help
 Docker:             docker_run / docker_build / docker_commit
                     docker_stop / docker_start / docker_remove
+                    docker_ps / docker_images
 SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 ```
 

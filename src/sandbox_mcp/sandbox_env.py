@@ -55,7 +55,8 @@ HELP_RESPONSE = {
         },
     ],
     "more_help": {
-        "docker_help": "Discover Docker machine actions: run/build/commit/stop/start/remove",
+        "docker_help": ("Discover Docker machine actions: run/build/commit/"
+                        "stop/start/remove/ps/images"),
         "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
     },
     "note": ("Core tools are directly exposed as sandbox_shell_exec, "
@@ -68,7 +69,10 @@ DOCKER_HELP_RESPONSE = {
     "operations": [
         {
             "action": "docker_run",
-            "description": "Create and start a Docker container.",
+            "description": ("Create and start a Docker container. Idempotent: "
+                            "if a container named sandbox-<name> already exists "
+                            "(e.g. after an MCP restart), the call attaches to "
+                            "it instead of creating a new one."),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "optional": {
                 "volumes": "string[] - e.g. ['/host:/container']",
@@ -78,6 +82,21 @@ DOCKER_HELP_RESPONSE = {
             },
             "returns": {"name": "string", "status": "running", "backend": "docker"},
             "example": {"name": "dev", "image": "python:3.12", "purpose": "Python dev"},
+        },
+        {
+            "action": "docker_ps",
+            "description": ("List existing Docker containers matching "
+                            "sandbox-* (direct daemon query, works even "
+                            "after restart when MachineRegistry is empty)."),
+            "optional": {"name_prefix": "string - filter by name prefix"},
+            "returns": [{"name": "string", "status": "string",
+                         "image": "string", "created": "string"}],
+        },
+        {
+            "action": "docker_images",
+            "description": "List available Docker images (direct daemon query).",
+            "returns": [{"tag": "string", "image_id": "string",
+                         "created": "string", "size_mb": "number"}],
         },
         {
             "action": "docker_build",
@@ -326,6 +345,15 @@ class SandboxEnv:
         result = backend.remove(machine)
         self._machines.unregister(machine)
         return result
+
+    # ---- docker discovery (direct daemon queries) ----
+
+    def _op_docker_ps(self, params):
+        name_prefix = params.get("name_prefix", "sandbox-")
+        return {"containers": self._docker.list_containers(name_prefix=name_prefix)}
+
+    def _op_docker_images(self, params):
+        return {"images": self._docker.list_images()}
 
     # ---- ssh ----
 

@@ -134,3 +134,29 @@ def test_docker_exec_oneoff(docker_backend, mock_client):
     result = docker_backend.exec_oneoff("dev", "echo hello")
     assert result["exit_code"] == 0
     assert "hello" in result["output"]
+
+
+def test_docker_list_containers_with_prefix(docker_backend, mock_client):
+    mock_client.containers.list.return_value = []
+    result = docker_backend.list_containers(name_prefix="sandbox-")
+    assert result == []
+
+
+def test_docker_list_containers(docker_backend, mock_client):
+    """list_containers queries daemon directly, not MachineRegistry."""
+    mock_container = MagicMock()
+    mock_container.name = "sandbox-dev"
+    mock_container.image = MagicMock()
+    mock_container.image.tags = ["python:3.12"]
+    mock_container.image.short_id = "sha256:abc"
+    mock_container.attrs = {"State": {"Status": "running"}, "Created": "2025-01-01T00:00:00Z"}
+    mock_client.containers.list.return_value = [mock_container]
+    result = docker_backend.list_containers(name_prefix="sandbox-")
+    assert len(result) == 1
+    assert result[0]["name"] == "sandbox-dev"
+    assert result[0]["status"] == "running"
+
+
+def test_docker_list_images(docker_backend, mock_client):
+    mock_client.images.list.return_value = []
+    assert docker_backend.list_images() == []
