@@ -101,10 +101,38 @@ def test_docker_open_shell(docker_backend):
     shell.close()
 
 
-def test_docker_exec_oneoff(docker_backend):
-    """exec_oneoff uses subprocess (docker SDK lacks stdin_p data support)."""
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
-        result = docker_backend.exec_oneoff("dev", "echo hello")
-        assert result["exit_code"] == 0
-        assert "hello" in result["output"]
+def test_docker_exec_oneoff_no_stdin(docker_backend, mock_client):
+    """exec_oneoff without stdin uses high-level exec_run."""
+    container = mock_client.containers.get.return_value
+    container.exec_run.return_value = (0, b"hello\n")
+    result = docker_backend.exec_oneoff("dev", "echo hello")
+    assert result["exit_code"] == 0
+    assert "hello" in result["output"]
+
+
+def test_docker_exec_oneoff_with_stdin(docker_backend, mock_client):
+    """exec_oneoff with stdin_data uses low-level socket API."""
+    container = mock_client.containers.get.return_value
+    container.id = "c789"
+    api = mock_client.api
+    api.exec_create.return_value = {"Id": "e123"}
+
+    # Build a Docker multiplexed frame: stdout type + payload_len + payload
+    import struct
+    payload = b"hello via sdk exec\n"
+    header_bytes = b"\x01\x00\x00\x00" + struct.pack(">I", len(payload))
+    socket_mock = MagicMock()
+    socket_mock._sock = MagicMock()
+    # Return header first, then payload, then trigger EOF.
+    socket_mock._sock.recv.side_effect = [
+        header_bytes,             # first call: 8-byte header
+        payload,                  # second call: payload
+        b"",                      # third call: EOF (b"")
+        OSError(),                # fourth call: any subsequent reads raise
+    ]
+    api.exec_start.return_value = socket_mock
+    api.exec_inspect.return_value = {"ExitCode": 0}
+
+    result = docker_backend.exec_oneoff("dev", "cat", stdin_data="hello via sdk exec\n")
+    assert result["exit_code"] == 0
+    assert "hello via sdk exec" in result["output"]
