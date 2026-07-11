@@ -49,8 +49,7 @@ class ShellRegistry:
             del self._default_shells[machine]
         return True
 
-    def get_or_create_default(self, machine: str,
-                              factory: Callable[[], ShellSession]) -> str:
+    def get_or_create_default(self, machine: str, factory: Callable[[], ShellSession]) -> str:
         existing = self._default_shells.get(machine)
         if existing and existing in self._shells:
             return existing

@@ -19,8 +19,7 @@ class TargetRegistry:
         self._machines: dict[str, dict] = {}
         self._default: str | None = None
 
-    def register(self, name: str, backend: Backend, purpose: str = "",
-                 **kwargs) -> TargetInfo:
+    def register(self, name: str, backend: Backend, purpose: str = "", **kwargs) -> TargetInfo:
         info = backend.create(name, purpose=purpose, **kwargs)
         self._machines[name] = {
             "backend": backend,

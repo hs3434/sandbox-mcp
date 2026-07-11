@@ -32,8 +32,11 @@ def docker_backend(mock_client):
 
 def test_docker_create(docker_backend, mock_client):
     info = docker_backend.create(
-        name="dev", purpose="test", image="python:3.12",
-        volumes=["/host:/container"], ports=["8080:8080"],
+        name="dev",
+        purpose="test",
+        image="python:3.12",
+        volumes=["/host:/container"],
+        ports=["8080:8080"],
     )
     assert info.name == "dev"
     assert info.backend == "docker"
@@ -47,9 +50,9 @@ def test_docker_create(docker_backend, mock_client):
 
 def test_docker_create_image_not_found(docker_backend, mock_client):
     from docker.errors import ImageNotFound
+
     mock_client.containers.run.side_effect = ImageNotFound("nope")
-    info = docker_backend.create(
-        name="dev", purpose="test", image="nonexistent:latest")
+    info = docker_backend.create(name="dev", purpose="test", image="nonexistent:latest")
     assert info.status == "error"
 
 
@@ -87,8 +90,7 @@ def test_docker_build(docker_backend, tmp_path):
     df.write_text("FROM python:3.12\n")
     with patch.object(docker_backend._ensure_client().images, "build") as mock_build:
         mock_build.return_value = (MagicMock(), [])
-        result = docker_backend.build("my-image:latest", str(df),
-                                      context_dir=str(tmp_path))
+        result = docker_backend.build("my-image:latest", str(df), context_dir=str(tmp_path))
         assert result["status"] == "built"
 
 
@@ -101,12 +103,14 @@ def test_docker_open_shell(docker_backend, mock_client):
 
     # Create a pipe so the DockerExecProcess has real fds.
     import os
+
     r_out, w_out = os.pipe()
     r_in, w_in = os.pipe()
 
     # The sock._sock needs to be a real socket-like for sendall/recv.
     # Use a real socket for the mock.
     import socket
+
     a, b = socket.socketpair()
 
     socket_mock = MagicMock()

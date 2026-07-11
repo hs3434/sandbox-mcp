@@ -13,8 +13,7 @@ def sink():
 
 def test_record_basic_shape(sink):
     log = AuditLogger(sink=sink)
-    log.record(machine="dev", action="shell_exec", status="ok",
-               duration_ms=42, command="ls -la")
+    log.record(machine="dev", action="shell_exec", status="ok", duration_ms=42, command="ls -la")
     line = sink.getvalue().strip()
     entry = json.loads(line)
     assert entry["machine"] == "dev"
@@ -26,8 +25,7 @@ def test_record_basic_shape(sink):
 
 def test_record_hashes_content(sink):
     log = AuditLogger(sink=sink)
-    log.record(machine="dev", action="file_write",
-               path="/tmp/x.py", content="print('hello')\n")
+    log.record(machine="dev", action="file_write", path="/tmp/x.py", content="print('hello')\n")
     entry = json.loads(sink.getvalue().strip())
     details = entry["details"]
     # Raw content must NOT appear in the audit stream.
@@ -70,8 +68,7 @@ def test_default_logger_is_disabled_via_close(monkeypatch):
     from sandbox_mcp import audit as audit_module
 
     captured = io.StringIO()
-    monkeypatch.setattr(audit_module, "DEFAULT_AUDIT_LOGGER",
-                        AuditLogger(sink=captured))
+    monkeypatch.setattr(audit_module, "DEFAULT_AUDIT_LOGGER", AuditLogger(sink=captured))
     audit_module.DEFAULT_AUDIT_LOGGER.record(machine="x", action="y")
     assert "y" in captured.getvalue()
     audit_module.DEFAULT_AUDIT_LOGGER.close()

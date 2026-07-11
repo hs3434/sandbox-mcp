@@ -17,16 +17,19 @@ def fops(backend):
 
 # ---- read ----
 
+
 def test_read_returns_line_numbered_output(fops, backend):
     backend.exec_oneoff.return_value = {
-        "exit_code": 0, "output": "42\n", "stderr": "",
+        "exit_code": 0,
+        "output": "42\n",
+        "stderr": "",
     }
     # wc -c, head -c, sed, wc -l all run; last call returns total lines.
     backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "21\n", "stderr": ""},     # wc -c
+        {"exit_code": 0, "output": "21\n", "stderr": ""},  # wc -c
         {"exit_code": 0, "output": "line1\nline2\nline3\n", "stderr": ""},  # head -c
         {"exit_code": 0, "output": "line1\nline2\nline3\n", "stderr": ""},  # sed
-        {"exit_code": 0, "output": "3\n", "stderr": ""},       # wc -l
+        {"exit_code": 0, "output": "3\n", "stderr": ""},  # wc -l
     ]
     result = fops.read("/tmp/x.txt", machine="dev")
     assert result["status"] == "ok"
@@ -37,10 +40,10 @@ def test_read_returns_line_numbered_output(fops, backend):
 
 def test_read_pagination_offset_and_limit(fops, backend):
     backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "100\n", "stderr": ""},     # wc -c
+        {"exit_code": 0, "output": "100\n", "stderr": ""},  # wc -c
         {"exit_code": 0, "output": "line2\nline3\n", "stderr": ""},  # head -c
         {"exit_code": 0, "output": "line2\nline3\n", "stderr": ""},  # sed
-        {"exit_code": 0, "output": "5\n", "stderr": ""},       # wc -l
+        {"exit_code": 0, "output": "5\n", "stderr": ""},  # wc -l
     ]
     result = fops.read("/tmp/x.txt", machine="dev", offset=2, limit=2)
     assert result["offset"] == 2
@@ -66,7 +69,7 @@ def test_read_returns_truncation_hint_at_eof(fops, backend):
 
 def test_read_not_found_returns_suggestions(fops, backend):
     backend.exec_oneoff.side_effect = [
-        {"exit_code": 1, "output": "", "stderr": ""},    # wc -c (file missing)
+        {"exit_code": 1, "output": "", "stderr": ""},  # wc -c (file missing)
         {"exit_code": 0, "output": "missing.bak\nother.txt\n", "stderr": ""},  # ls
     ]
     result = fops.read("/tmp/missing.txt", machine="dev")
@@ -92,6 +95,7 @@ def test_read_image_returns_image_hint(fops, backend):
 
 
 # ---- write ----
+
 
 def test_write_fails_on_invalid_json_content(fops, backend):
     result = fops.write("/tmp/x.json", "{this is not json", machine="dev")
@@ -119,7 +123,7 @@ def test_write_atomic_write_calls_backend_write_file(fops, backend):
     # exec_oneff. write_file is the new transport.
     backend.exec_oneoff.side_effect = [
         {"exit_code": 0, "output": "hello\n", "stderr": ""},  # verify
-        {"exit_code": 0, "output": "6\n", "stderr": ""},       # wc -c
+        {"exit_code": 0, "output": "6\n", "stderr": ""},  # wc -c
     ]
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
     backend.write_file.assert_called_once()
@@ -132,7 +136,9 @@ def test_write_atomic_write_calls_backend_write_file(fops, backend):
 def test_write_post_write_verify_detects_mismatch(fops, backend):
     backend.write_file.return_value = {"status": "ok", "bytes_written": 9}
     backend.exec_oneoff.return_value = {
-        "exit_code": 0, "output": "WRONG\n", "stderr": "",
+        "exit_code": 0,
+        "output": "WRONG\n",
+        "stderr": "",
     }
     result = fops.write("/tmp/x.txt", "expected\n", machine="dev")
     assert result["status"] == "error"
@@ -158,7 +164,7 @@ def test_write_preserves_bom_when_target_has_it(fops, backend):
     backend.write_file.return_value = {"status": "ok", "bytes_written": 6}
     backend.exec_oneoff.side_effect = [
         {"exit_code": 0, "output": "\ufeffhello\n", "stderr": ""},  # cat with BOM
-        {"exit_code": 0, "output": "\ufeffhello\n", "stderr": ""},   # verify
+        {"exit_code": 0, "output": "\ufeffhello\n", "stderr": ""},  # verify
     ]
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
     # Verify BOM is prepended in the bytes handed to write_file.
@@ -167,6 +173,7 @@ def test_write_preserves_bom_when_target_has_it(fops, backend):
 
 
 # ---- patch ----
+
 
 def _patch_setup(backend, initial_file, post_file):
     """Configure a backend to return ``initial_file`` on cat, succeed on
@@ -184,8 +191,9 @@ def _patch_setup(backend, initial_file, post_file):
 def test_patch_replace_mode_replaces_unique_string(fops, backend):
     initial = "alpha\nbeta\ngamma\n"
     _patch_setup(backend, initial, "alpha\nBETA\ngamma\n")
-    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
-                       old_string="beta", new_string="BETA")
+    result = fops.patch(
+        mode="replace", machine="dev", path="/tmp/x.txt", old_string="beta", new_string="BETA"
+    )
     assert result["status"] == "ok"
     assert result["matches"] == 1
 
@@ -193,8 +201,9 @@ def test_patch_replace_mode_replaces_unique_string(fops, backend):
 def test_patch_replace_mode_returns_diff(fops, backend):
     initial = "a\nb\nc\n"
     _patch_setup(backend, initial, "a\nB\nc\n")
-    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
-                       old_string="b", new_string="B")
+    result = fops.patch(
+        mode="replace", machine="dev", path="/tmp/x.txt", old_string="b", new_string="B"
+    )
     assert "diff" in result
     assert "-b" in result["diff"]
     assert "+B" in result["diff"]
@@ -203,8 +212,9 @@ def test_patch_replace_mode_returns_diff(fops, backend):
 def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
     initial = "x\nx\nx\n"
     _patch_setup(backend, initial, initial)
-    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
-                       old_string="x", new_string="y")
+    result = fops.patch(
+        mode="replace", machine="dev", path="/tmp/x.txt", old_string="x", new_string="y"
+    )
     assert result["status"] == "error"
     assert "Multiple matches" in result["error"]
 
@@ -212,9 +222,14 @@ def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
 def test_patch_replace_mode_fuzzy_match(fops, backend):
     initial = "hello world\n"
     _patch_setup(backend, initial, initial)
-    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
-                       old_string="helo world", new_string="hello world",
-                       replace_all=False)
+    result = fops.patch(
+        mode="replace",
+        machine="dev",
+        path="/tmp/x.txt",
+        old_string="helo world",
+        new_string="hello world",
+        replace_all=False,
+    )
     assert result["status"] == "ok"
     assert result["fuzzy"] is True
 
@@ -224,8 +239,9 @@ def test_patch_replace_mode_normalizes_crlf(fops, backend):
     initial = "alpha\r\nbeta\r\ngamma\r\n"
     expected_after = "alpha\r\nBETA\r\ngamma\r\n"
     _patch_setup(backend, initial, expected_after)
-    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
-                       old_string="beta", new_string="BETA")
+    result = fops.patch(
+        mode="replace", machine="dev", path="/tmp/x.txt", old_string="beta", new_string="BETA"
+    )
     assert result["status"] == "ok"
     # Verify the bytes handed to write_file are CRLF-encoded.
     write_bytes = backend.write_file.call_args.args[2]
@@ -244,6 +260,7 @@ def test_patch_apply_mode_empty(fops, backend):
 
 
 # ---- search ----
+
 
 def test_search_content_returns_matching_lines(fops, backend):
     backend.exec_oneoff.return_value = {
@@ -308,10 +325,14 @@ def test_search_rejects_unknown_search_type(fops, backend):
 
 # ---- expand_path ----
 
+
 def test_expand_tilde_uses_backend_home(fops, backend):
     from sandbox_mcp.file_operations import _expand_path
+
     backend.exec_oneoff.return_value = {
-        "exit_code": 0, "output": "/home/dev\n", "stderr": "",
+        "exit_code": 0,
+        "output": "/home/dev\n",
+        "stderr": "",
     }
     assert _expand_path("~/x.txt", backend) == "/home/dev/x.txt"
     assert _expand_path("~", backend) == "/home/dev"
@@ -319,13 +340,17 @@ def test_expand_tilde_uses_backend_home(fops, backend):
 
 def test_expand_path_passthrough_when_no_tilde(fops):
     from sandbox_mcp.file_operations import _expand_path
+
     assert _expand_path("/tmp/x", fops._backend) == "/tmp/x"
     assert _expand_path("relative", fops._backend) == "relative"
 
 
 def test_expand_path_lone_tilde(fops):
     from sandbox_mcp.file_operations import _expand_path
+
     fops._backend.exec_oneoff.return_value = {
-        "exit_code": 0, "output": "/home/dev\n", "stderr": "",
+        "exit_code": 0,
+        "output": "/home/dev\n",
+        "stderr": "",
     }
     assert _expand_path("~", fops._backend) == "/home/dev"

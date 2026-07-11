@@ -69,8 +69,7 @@ def test_default_set_sets_default_shell(sandbox_env):
 
 
 def test_default_set_rejects_both_machine_and_shell(sandbox_env):
-    result = sandbox_env.dispatch("default_set",
-                                  {"machine": "dev", "shell_id": "sh_abc"})
+    result = sandbox_env.dispatch("default_set", {"machine": "dev", "shell_id": "sh_abc"})
     assert "error" in result
 
 
@@ -91,8 +90,9 @@ def test_machine_list_returns_machines(sandbox_env):
 def test_status_returns_state(sandbox_env):
     sandbox_env._machines.get_default.return_value = "dev"
     sandbox_env._machines.list_machines.return_value = ["dev"]
-    info = MagicMock(name="dev", backend="docker", status="running",
-                     purpose="test", shells=0, uptime="")
+    info = MagicMock(
+        name="dev", backend="docker", status="running", purpose="test", shells=0, uptime=""
+    )
     sandbox_env._machines.get_info.return_value = info
     sandbox_env._machines.get_created_at.return_value = 0
     sandbox_env._shells.list_shells.return_value = []
@@ -109,11 +109,9 @@ def test_shell_new(sandbox_env):
     sandbox_env._machines.resolve_machine.return_value = "dev"
     sandbox_env._machines.get_backend.return_value = backend
     sandbox_env._shells.open.return_value = "sh_abc"
-    result = sandbox_env.dispatch("shell_new",
-                                  {"machine": "dev", "purpose": "server"})
+    result = sandbox_env.dispatch("shell_new", {"machine": "dev", "purpose": "server"})
     backend.open_shell.assert_called_once_with("dev")
-    sandbox_env._shells.open.assert_called_once_with("dev", shell,
-                                                     purpose="server")
+    sandbox_env._shells.open.assert_called_once_with("dev", shell, purpose="server")
     assert result == {"shell_id": "sh_abc", "machine": "dev"}
 
 
@@ -134,9 +132,9 @@ def test_shell_list(sandbox_env):
 def test_docker_run(sandbox_env):
     info = MagicMock(name="dev", backend="docker", status="running", purpose="test")
     sandbox_env._machines.register.return_value = info
-    result = sandbox_env.dispatch("docker_run", {
-        "name": "dev", "image": "python:3.12", "purpose": "test"
-    })
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
     assert result["status"] == "running"
     assert result["backend"] == "docker"
 
@@ -153,8 +151,12 @@ def test_missing_required_param_returns_error(sandbox_env):
 
 def test_docker_ps_returns_container_list(sandbox_env):
     sandbox_env._docker.list_containers.return_value = [
-        {"name": "sandbox-dev", "status": "running", "image": "python:3.12",
-         "created": "2025-01-01T00:00:00Z"},
+        {
+            "name": "sandbox-dev",
+            "status": "running",
+            "image": "python:3.12",
+            "created": "2025-01-01T00:00:00Z",
+        },
     ]
     result = sandbox_env.dispatch("docker_ps", {"name_prefix": "sandbox-"})
     assert "containers" in result
@@ -163,8 +165,7 @@ def test_docker_ps_returns_container_list(sandbox_env):
 
 def test_docker_images_returns_images(sandbox_env):
     sandbox_env._docker.list_images.return_value = [
-        {"tag": "python:3.12", "image_id": "sha256:abc", "created": "",
-         "size_mb": 120.5},
+        {"tag": "python:3.12", "image_id": "sha256:abc", "created": "", "size_mb": 120.5},
     ]
     result = sandbox_env.dispatch("docker_images", {})
     assert "images" in result

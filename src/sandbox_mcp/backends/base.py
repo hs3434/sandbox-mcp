@@ -10,7 +10,7 @@ from sandbox_mcp.shell_session import ShellSession
 class TargetInfo:
     name: str
     backend: str  # "docker" | "ssh"
-    status: str   # "running" | "stopped" | "error" | "terminated"
+    status: str  # "running" | "stopped" | "error" | "terminated"
     purpose: str = ""
     shells: int = 0
     uptime: str = ""

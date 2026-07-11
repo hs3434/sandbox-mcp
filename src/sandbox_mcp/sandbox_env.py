@@ -15,24 +15,32 @@ logger = logging.getLogger(__name__)
 
 HELP_RESPONSE = {
     "default_actions": [
-        {"action": "help",
-         "description": "Discover common management actions and backend help entries."},
-        {"action": "status",
-         "description": "Show current state: default machine, machine list, shell list."},
+        {
+            "action": "help",
+            "description": "Discover common management actions and backend help entries.",
+        },
+        {
+            "action": "status",
+            "description": "Show current state: default machine, machine list, shell list.",
+        },
     ],
     "operations": [
         {
             "action": "machine_list",
-            "description": ("List all registered machines with backend, status, "
-                            "purpose, shell count, and uptime. Lighter than status "
-                            "(no shell details)."),
+            "description": (
+                "List all registered machines with backend, status, "
+                "purpose, shell count, and uptime. Lighter than status "
+                "(no shell details)."
+            ),
             "example": {},
         },
         {
             "action": "default_set",
-            "description": ("Set default machine or default shell. Pass machine to set "
-                            "the default machine. Pass shell_id to set that shell as "
-                            "its machine's default shell."),
+            "description": (
+                "Set default machine or default shell. Pass machine to set "
+                "the default machine. Pass shell_id to set that shell as "
+                "its machine's default shell."
+            ),
             "optional": {"machine": "string", "shell_id": "string"},
             "requires": "Exactly one of machine or shell_id",
             "example": {"machine": "dev"},
@@ -44,8 +52,10 @@ HELP_RESPONSE = {
         },
         {
             "action": "shell_remove",
-            "description": ("Terminate and remove a shell session. If already "
-                            "terminated, remove the registry entry."),
+            "description": (
+                "Terminate and remove a shell session. If already "
+                "terminated, remove the registry entry."
+            ),
             "required": {"shell_id": "string"},
         },
         {
@@ -55,13 +65,16 @@ HELP_RESPONSE = {
         },
     ],
     "more_help": {
-        "docker_help": ("Discover Docker machine actions: run/build/commit/"
-                        "stop/start/remove/ps/images"),
+        "docker_help": (
+            "Discover Docker machine actions: run/build/commit/stop/start/remove/ps/images"
+        ),
         "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
     },
-    "note": ("Core tools are directly exposed as sandbox_shell_exec, "
-             "sandbox_shell_read, and sandbox_file_read/write/patch/search. "
-             "Machine-aware tools support optional machine."),
+    "note": (
+        "Core tools are directly exposed as sandbox_shell_exec, "
+        "sandbox_shell_read, and sandbox_file_read/write/patch/search. "
+        "Machine-aware tools support optional machine."
+    ),
 }
 
 
@@ -69,10 +82,12 @@ DOCKER_HELP_RESPONSE = {
     "operations": [
         {
             "action": "docker_run",
-            "description": ("Create and start a Docker container. Idempotent: "
-                            "if a container named sandbox-<name> already exists "
-                            "(e.g. after an MCP restart), the call attaches to "
-                            "it instead of creating a new one."),
+            "description": (
+                "Create and start a Docker container. Idempotent: "
+                "if a container named sandbox-<name> already exists "
+                "(e.g. after an MCP restart), the call attaches to "
+                "it instead of creating a new one."
+            ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "optional": {
                 "volumes": "string[] - e.g. ['/host:/container']",
@@ -85,18 +100,22 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_ps",
-            "description": ("List existing Docker containers matching "
-                            "sandbox-* (direct daemon query, works even "
-                            "after restart when MachineRegistry is empty)."),
+            "description": (
+                "List existing Docker containers matching "
+                "sandbox-* (direct daemon query, works even "
+                "after restart when MachineRegistry is empty)."
+            ),
             "optional": {"name_prefix": "string - filter by name prefix"},
-            "returns": [{"name": "string", "status": "string",
-                         "image": "string", "created": "string"}],
+            "returns": [
+                {"name": "string", "status": "string", "image": "string", "created": "string"}
+            ],
         },
         {
             "action": "docker_images",
             "description": "List available Docker images (direct daemon query).",
-            "returns": [{"tag": "string", "image_id": "string",
-                         "created": "string", "size_mb": "number"}],
+            "returns": [
+                {"tag": "string", "image_id": "string", "created": "string", "size_mb": "number"}
+            ],
         },
         {
             "action": "docker_build",
@@ -139,15 +158,18 @@ SSH_HELP_RESPONSE = {
         {
             "action": "ssh_connect",
             "description": "Connect to an SSH remote machine (key auth only).",
-            "required": {"name": "string", "host": "string", "user": "string",
-                         "purpose": "string"},
+            "required": {"name": "string", "host": "string", "user": "string", "purpose": "string"},
             "optional": {
                 "port": "int - default 22",
                 "key": "string - private key path (key auth only)",
             },
             "returns": {"name": "string", "status": "connected", "backend": "ssh"},
-            "example": {"name": "remote", "host": "192.168.1.100",
-                        "user": "ubuntu", "purpose": "Remote server"},
+            "example": {
+                "name": "remote",
+                "host": "192.168.1.100",
+                "user": "ubuntu",
+                "purpose": "Remote server",
+            },
         },
         {
             "action": "ssh_disconnect",
@@ -190,8 +212,9 @@ class SandboxEnv:
     def dispatch(self, action: str, params: dict) -> Any:
         handler = getattr(self, f"_op_{action}", None)
         if handler is None:
-            return {"error": f"Unknown action: {action}. "
-                              "Call action=help for available operations."}
+            return {
+                "error": f"Unknown action: {action}. Call action=help for available operations."
+            }
         try:
             return handler(params or {})
         except Exception as e:
@@ -214,21 +237,26 @@ class SandboxEnv:
         machines = []
         for name in self._machines.list_machines():
             info = self._machines.get_info(name)
-            machines.append({
-                "name": name,
-                "backend": info.backend,
-                "status": info.status,
-                "purpose": info.purpose or "",
-                "shells": len(self._shells.list_shells(machine=name)),
-                "uptime": _format_uptime(self._machines.get_created_at(name)),
-            })
+            machines.append(
+                {
+                    "name": name,
+                    "backend": info.backend,
+                    "status": info.status,
+                    "purpose": info.purpose or "",
+                    "shells": len(self._shells.list_shells(machine=name)),
+                    "uptime": _format_uptime(self._machines.get_created_at(name)),
+                }
+            )
         return {"machines": machines}
 
     def _op_status(self, params):
         default = self._machines.get_default()
         machines = self._op_machine_list({})["machines"]
-        return {"default_machine": default, "machines": machines,
-                "shells": self._shells.list_shells()}
+        return {
+            "default_machine": default,
+            "machines": machines,
+            "shells": self._shells.list_shells(),
+        }
 
     # ---- general ----
 
@@ -251,15 +279,13 @@ class SandboxEnv:
         if shell_target is None:
             return {"error": f"Unknown shell_id: {params['shell_id']}"}
         self._shells.set_default(params["shell_id"])
-        return {"default_shell": {"machine": shell_target,
-                                  "shell_id": params["shell_id"]}}
+        return {"default_shell": {"machine": shell_target, "shell_id": params["shell_id"]}}
 
     def _op_shell_new(self, params):
         machine = self._machines.resolve_machine(params.get("machine"))
         backend = self._machines.get_backend(machine)
         session = backend.open_shell(machine)
-        shell_id = self._shells.open(machine, session,
-                                     purpose=params.get("purpose", "manual"))
+        shell_id = self._shells.open(machine, session, purpose=params.get("purpose", "manual"))
         return {"shell_id": shell_id, "machine": machine}
 
     def _op_shell_remove(self, params):
@@ -279,7 +305,8 @@ class SandboxEnv:
         if err is not None:
             return {"error": err}
         info = self._machines.register(
-            params["name"], self._docker,
+            params["name"],
+            self._docker,
             purpose=params.get("purpose", ""),
             image=params["image"],
             volumes=params.get("volumes", []),
@@ -293,8 +320,9 @@ class SandboxEnv:
         err = self._require(params, "image_tag", "dockerfile")
         if err is not None:
             return {"error": err}
-        return self._docker.build(params["image_tag"], params["dockerfile"],
-                                  params.get("context_dir"))
+        return self._docker.build(
+            params["image_tag"], params["dockerfile"], params.get("context_dir")
+        )
 
     def _op_docker_commit(self, params):
         err = self._require(params, "machine")
@@ -303,6 +331,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
+
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_commit only supported on Docker machines"}
         return backend.commit(machine, params.get("image_tag"))
@@ -314,6 +343,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
+
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_stop only supported on Docker machines"}
         self._shells.close_all_for_machine(machine)
@@ -327,6 +357,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
+
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_start only supported on Docker machines"}
         info = backend.start(machine)
@@ -339,6 +370,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
+
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_remove only supported on Docker machines"}
         self._shells.close_all_for_machine(machine)
@@ -362,7 +394,8 @@ class SandboxEnv:
         if err is not None:
             return {"error": err}
         info = self._machines.register(
-            params["name"], self._ssh,
+            params["name"],
+            self._ssh,
             purpose=params.get("purpose", ""),
             host=params["host"],
             user=params["user"],
@@ -378,6 +411,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
+
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_disconnect only supported on SSH machines"}
         self._shells.close_all_for_machine(machine)
@@ -391,6 +425,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
+
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_reconnect only supported on SSH machines"}
         info = backend.start(machine)
@@ -403,6 +438,7 @@ class SandboxEnv:
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
+
         if not isinstance(backend, SSHBackend):
             return {"error": "ssh_remove only supported on SSH machines"}
         self._shells.close_all_for_machine(machine)

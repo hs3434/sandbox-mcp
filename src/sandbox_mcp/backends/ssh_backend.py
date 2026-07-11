@@ -40,9 +40,15 @@ class SSHBackend(Backend):
         if target is None:
             raise RuntimeError(f"Unknown SSH target: {name}")
         socket = self._socket_path(name)
-        args = [self._ssh, "-o", f"ControlPath={socket}",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=10"]
+        args = [
+            self._ssh,
+            "-o",
+            f"ControlPath={socket}",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+        ]
         port = target.get("port", 22)
         args += ["-p", str(port)]
         key = target.get("key")
@@ -59,11 +65,20 @@ class SSHBackend(Backend):
         port = kwargs.get("port", 22)
         key = kwargs.get("key")
 
-        cmd = [self._ssh, "-M", "-S", self._socket_path(name),
-               "-o", "ControlPersist=300",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "ConnectTimeout=10",
-               "-p", str(port)]
+        cmd = [
+            self._ssh,
+            "-M",
+            "-S",
+            self._socket_path(name),
+            "-o",
+            "ControlPersist=300",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(port),
+        ]
         if key:
             cmd += ["-i", key]
         cmd.append(f"{user}@{host}")
@@ -72,26 +87,26 @@ class SSHBackend(Backend):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return TargetInfo(name=name, backend="ssh", status="error",
-                              purpose=purpose)
+            return TargetInfo(name=name, backend="ssh", status="error", purpose=purpose)
         if result.returncode != 0:
-            return TargetInfo(name=name, backend="ssh", status="error",
-                              purpose=purpose)
+            return TargetInfo(name=name, backend="ssh", status="error", purpose=purpose)
         self._targets[name] = {
-            "host": host, "user": user, "port": port,
+            "host": host,
+            "user": user,
+            "port": port,
             "key": key,
             "socket": self._socket_path(name),
             "purpose": purpose,
             "started_at": time.time(),
         }
-        return TargetInfo(name=name, backend="ssh", status="running",
-                          purpose=purpose)
+        return TargetInfo(name=name, backend="ssh", status="running", purpose=purpose)
 
     def start(self, name):
         """Reconnect SSH ControlMaster."""
         target = self._targets.get(name, {})
-        return self.create(name, **{k: v for k, v in target.items()
-                                     if k in ("host", "user", "port", "key")})
+        return self.create(
+            name, **{k: v for k, v in target.items() if k in ("host", "user", "port", "key")}
+        )
 
     def stop(self, name):
         """Close the SSH master connection."""
@@ -104,13 +119,19 @@ class SSHBackend(Backend):
         try:
             result = subprocess.run(
                 [self._ssh, "-S", socket, "-O", "exit", f"{user}@{host}"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
         except subprocess.TimeoutExpired:
             return TargetInfo(name=name, backend="ssh", status="error")
         if result.returncode != 0:
-            return TargetInfo(name=name, backend="ssh", status="error",
-                              error=result.stderr.strip() or "ssh exit failed")
+            return TargetInfo(
+                name=name,
+                backend="ssh",
+                status="error",
+                error=result.stderr.strip() or "ssh exit failed",
+            )
         return TargetInfo(name=name, backend="ssh", status="stopped")
 
     def remove(self, name):
@@ -127,13 +148,16 @@ class SSHBackend(Backend):
         try:
             result = subprocess.run(
                 [*self._ssh_base_args(name), "true"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             status = "running" if result.returncode == 0 else "error"
         except (subprocess.TimeoutExpired, FileNotFoundError):
             status = "error"
-        return TargetInfo(name=name, backend="ssh", status=status,
-                          purpose=target.get("purpose", ""))
+        return TargetInfo(
+            name=name, backend="ssh", status=status, purpose=target.get("purpose", "")
+        )
 
     def open_shell(self, name):
         return ShellSession([*self._ssh_base_args(name), "bash"])
@@ -142,11 +166,15 @@ class SSHBackend(Backend):
         try:
             result = subprocess.run(
                 [*self._ssh_base_args(name), "bash", "-c", command],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
-            return {"exit_code": result.returncode,
-                    "output": result.stdout or "",
-                    "stderr": result.stderr or ""}
+            return {
+                "exit_code": result.returncode,
+                "output": result.stdout or "",
+                "stderr": result.stderr or "",
+            }
         except subprocess.TimeoutExpired:
             return {"exit_code": None, "output": "", "stderr": "timeout"}
 
@@ -164,14 +192,17 @@ class SSHBackend(Backend):
         if parent != "/":
             mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
             if mkdir.get("exit_code") not in (0, None):
-                return {"status": "error", "stage": "mkdir",
-                        "error": mkdir.get("stderr") or "mkdir failed"}
+                return {
+                    "status": "error",
+                    "stage": "mkdir",
+                    "error": mkdir.get("stderr") or "mkdir failed",
+                }
 
         script = (
             "set -e; "
             f"t={shlex.quote(path)}; "
             f'tmp=$(mktemp -p "${{t%/*}}" .sandbox-mcp-tmp.XXXXXX 2>/dev/null || '
-            'mktemp .sandbox-mcp-tmp.XXXXXX 2>/dev/null); '
+            "mktemp .sandbox-mcp-tmp.XXXXXX 2>/dev/null); "
             '[ -n "$tmp" ] || { echo "atomic write: mktemp failed" >&2; exit 1; }; '
             'cat > "$tmp"; '
             'mv -f "$tmp" "$t"; '
@@ -187,8 +218,9 @@ class SSHBackend(Backend):
         except subprocess.TimeoutExpired:
             return {"status": "error", "stage": "write", "error": "timeout"}
         if result.returncode != 0:
-            return {"status": "error", "stage": "write",
-                    "error": (result.stderr or result.stdout
-                              or "atomic write failed")}
-        return {"status": "ok", "path": path,
-                "bytes_written": len(content)}
+            return {
+                "status": "error",
+                "stage": "write",
+                "error": (result.stderr or result.stdout or "atomic write failed"),
+            }
+        return {"status": "ok", "path": path, "bytes_written": len(content)}

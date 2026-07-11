@@ -30,9 +30,15 @@ class AuditLogger:
         self._sink = sink if sink is not None else sys.stderr
         self._closed = False
 
-    def record(self, *, machine: str | None, action: str,
-               status: str = "ok", duration_ms: int | None = None,
-               **details: Any) -> None:
+    def record(
+        self,
+        *,
+        machine: str | None,
+        action: str,
+        status: str = "ok",
+        duration_ms: int | None = None,
+        **details: Any,
+    ) -> None:
         """Emit one audit record.
 
         ``machine`` may be ``None`` for actions that don't apply to a

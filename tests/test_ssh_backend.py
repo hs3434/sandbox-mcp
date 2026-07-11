@@ -14,7 +14,10 @@ def test_ssh_create(ssh_backend):
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         info = ssh_backend.create(
-            name="remote", purpose="remote", host="192.168.1.100", user="ubuntu",
+            name="remote",
+            purpose="remote",
+            host="192.168.1.100",
+            user="ubuntu",
         )
         assert info.name == "remote"
         assert info.backend == "ssh"
@@ -23,7 +26,9 @@ def test_ssh_create(ssh_backend):
 
 def test_ssh_stop_disconnects(ssh_backend):
     ssh_backend._targets["remote"] = {
-        "host": "192.168.1.100", "user": "ubuntu", "port": 22,
+        "host": "192.168.1.100",
+        "user": "ubuntu",
+        "port": 22,
         "socket": "/tmp/sandbox-mcp-ssh-remote",
     }
     with patch("subprocess.run") as mock_run:
@@ -43,8 +48,11 @@ def test_ssh_remove_unregisters(ssh_backend):
 
 def test_ssh_open_shell(ssh_backend):
     ssh_backend._targets["remote"] = {
-        "host": "192.168.1.100", "user": "ubuntu", "port": 22,
-        "socket": "/tmp/sandbox-mcp-ssh-remote", "key": None,
+        "host": "192.168.1.100",
+        "user": "ubuntu",
+        "port": 22,
+        "socket": "/tmp/sandbox-mcp-ssh-remote",
+        "key": None,
     }
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
@@ -56,7 +64,10 @@ def test_ssh_open_shell(ssh_backend):
 def test_ssh_write_file_streams_content_via_stdin(ssh_backend):
     """write_file pipes content over SSH stdin (no shell ARG_MAX)."""
     ssh_backend._targets["remote"] = {
-        "host": "h", "user": "u", "port": 22, "key": None,
+        "host": "h",
+        "user": "u",
+        "port": 22,
+        "key": None,
     }
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -75,11 +86,16 @@ def test_ssh_write_file_streams_content_via_stdin(ssh_backend):
 
 def test_ssh_write_file_propagates_error(ssh_backend):
     ssh_backend._targets["remote"] = {
-        "host": "h", "user": "u", "port": 22, "key": None,
+        "host": "h",
+        "user": "u",
+        "port": 22,
+        "key": None,
     }
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="permission denied",
+            returncode=1,
+            stdout="",
+            stderr="permission denied",
         )
         result = ssh_backend.write_file("remote", "/tmp/x.txt", b"hi")
     assert result["status"] == "error"

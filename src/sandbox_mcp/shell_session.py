@@ -23,8 +23,8 @@ _MARKER_RE = re.compile(r"__(START|END)_[0-9a-f]+__(?::\d+)?")
 class ShellSession:
     """A persistent shell (bash) process with drain-thread-based I/O."""
 
-    HEAD_SIZE = 5120        # 5KB head buffer
-    TAIL_SIZE = 46080       # ~45KB tail ring buffer
+    HEAD_SIZE = 5120  # 5KB head buffer
+    TAIL_SIZE = 46080  # ~45KB tail ring buffer
     DEFAULT_MAX_OUTPUT = 50000  # 50KB default output limit
 
     def __init__(self, args=None, process=None):
@@ -105,19 +105,17 @@ class ShellSession:
                 break
             self._store_output(line)
 
-            start_tag = (self._pending_start_marker.encode("utf-8")
-                         if self._pending_start_marker else None)
-            end_tag = (self._pending_end_marker.encode("utf-8")
-                       if self._pending_end_marker else None)
-            if (start_tag is not None
-                    and not self._start_event.is_set()
-                    and start_tag in line):
+            start_tag = (
+                self._pending_start_marker.encode("utf-8") if self._pending_start_marker else None
+            )
+            end_tag = self._pending_end_marker.encode("utf-8") if self._pending_end_marker else None
+            if start_tag is not None and not self._start_event.is_set() and start_tag in line:
                 self._start_event.set()
 
             if end_tag is not None and not self._end_event.is_set():
                 end_prefix = end_tag + b":"
                 if end_prefix in line:
-                    after = line[line.index(end_prefix) + len(end_prefix):]
+                    after = line[line.index(end_prefix) + len(end_prefix) :]
                     code_str = after.strip()
                     try:
                         self._pending_exit_code = int(code_str)
@@ -154,12 +152,20 @@ class ShellSession:
         """
         with self._lock:
             if self._state in ("terminated", "closed"):
-                return {"output": "", "exit_code": None, "status": "error",
-                        "error": "Shell is terminated"}
+                return {
+                    "output": "",
+                    "exit_code": None,
+                    "status": "error",
+                    "error": "Shell is terminated",
+                }
             if self._state in ("busy", "running"):
-                return {"output": "", "exit_code": None, "status": "error",
-                        "error": "Shell is busy (previous command still running). "
-                                 "Use shell_read to check or shell_remove to kill."}
+                return {
+                    "output": "",
+                    "exit_code": None,
+                    "status": "error",
+                    "error": "Shell is busy (previous command still running). "
+                    "Use shell_read to check or shell_remove to kill.",
+                }
 
             marker = uuid.uuid4().hex
             start_marker = f"__START_{marker}__"
@@ -226,8 +232,11 @@ class ShellSession:
             if self._end_event.is_set() and self._pending_exit_code is not None:
                 output = self._get_buffered_output(self.DEFAULT_MAX_OUTPUT)
                 self._state = "idle"
-                return {"output": output, "exit_code": self._pending_exit_code,
-                        "status": "completed"}
+                return {
+                    "output": output,
+                    "exit_code": self._pending_exit_code,
+                    "status": "completed",
+                }
 
             output = self._get_buffered_output(self.DEFAULT_MAX_OUTPUT)
             return {"output": output, "status": "running"}

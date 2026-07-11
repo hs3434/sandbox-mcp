@@ -122,6 +122,7 @@ def test_drain_exits_on_bash_exit():
     which fires when bash closes its stdout (after `proc.kill`).
     """
     import time
+
     session = ShellSession(["bash"])
     thread = session._drain_thread
     session.send("exit 0", wait=True, timeout=5)

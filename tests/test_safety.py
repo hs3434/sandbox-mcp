@@ -9,12 +9,16 @@ from sandbox_mcp.safety import (
 
 # ---- exact paths ----
 
-@pytest.mark.parametrize("path", [
-    "/etc/shadow",
-    "/etc/passwd",
-    "/etc/sudoers",
-    "/etc/gshadow",
-])
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/etc/shadow",
+        "/etc/passwd",
+        "/etc/sudoers",
+        "/etc/gshadow",
+    ],
+)
 def test_exact_system_paths_are_advised(path):
     result = check_path_safety(path)
     assert result["warning"] is not None
@@ -46,20 +50,24 @@ def test_etc_path_traversal_would_resolve_to_blocked(tmp_path, monkeypatch):
 
 # ---- path prefixes ----
 
-@pytest.mark.parametrize("path", [
-    "/root/.ssh/id_rsa",
-    "/root/.ssh/authorized_keys",
-    "/root/.ssh/config",
-    "/root/.aws/credentials",
-    "/root/.gnupg/secring.gpg",
-    "/root/.kube/config",
-    "/root/.docker/config.json",
-    "/root/.netrc",
-    "/root/.pgpass",
-    "/root/.pypirc",
-    "/home/user/.ssh/id_rsa",
-    "/home/deploy/.aws/credentials",
-])
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/root/.ssh/id_rsa",
+        "/root/.ssh/authorized_keys",
+        "/root/.ssh/config",
+        "/root/.aws/credentials",
+        "/root/.gnupg/secring.gpg",
+        "/root/.kube/config",
+        "/root/.docker/config.json",
+        "/root/.netrc",
+        "/root/.pgpass",
+        "/root/.pypirc",
+        "/home/user/.ssh/id_rsa",
+        "/home/deploy/.aws/credentials",
+    ],
+)
 def test_credential_directory_paths_are_advised(path):
     result = check_path_safety(path)
     assert result["warning"] is not None
@@ -74,24 +82,31 @@ def test_ssh_subdir_specifically_advised_with_dir_prefix_category():
 
 # ---- basenames ----
 
-@pytest.mark.parametrize("path", [
-    "/tmp/.env",
-    "/var/www/myapp/.env.production",
-    "/srv/project/.env.local",
-    "/root/.envrc",
-    "/opt/legacy/.env",
-])
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/.env",
+        "/var/www/myapp/.env.production",
+        "/srv/project/.env.local",
+        "/root/.envrc",
+        "/opt/legacy/.env",
+    ],
+)
 def test_project_env_basenames_are_advised(path):
     result = check_path_safety(path)
     assert result["warning"] is not None
     assert result["category"] == CATEGORIES["basename"]
 
 
-@pytest.mark.parametrize("path", [
-    "/tmp/id_rsa",
-    "/var/spool/old/id_ed25519",
-    "/srv/leaked/id_dsa",
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/id_rsa",
+        "/var/spool/old/id_ed25519",
+        "/srv/leaked/id_dsa",
+    ],
+)
 def test_private_key_basenames_are_advised(path):
     result = check_path_safety(path)
     assert result["warning"] is not None
@@ -100,13 +115,17 @@ def test_private_key_basenames_are_advised(path):
 
 # ---- safe paths ----
 
-@pytest.mark.parametrize("path", [
-    "/tmp/safe.txt",
-    "/var/log/app.log",
-    "/root/code/main.py",
-    "/srv/data/measurements.json",
-    "/home/user/projects/README.md",
-])
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/safe.txt",
+        "/var/log/app.log",
+        "/root/code/main.py",
+        "/srv/data/measurements.json",
+        "/home/user/projects/README.md",
+    ],
+)
 def test_safe_paths_return_no_advisory(path):
     result = check_path_safety(path)
     assert result["warning"] is None
@@ -114,6 +133,7 @@ def test_safe_paths_return_no_advisory(path):
 
 
 # ---- is_read_denied / is_write_denied are aliases ----
+
 
 def test_is_read_denied_matches_check_path_safety():
     assert is_read_denied("/etc/shadow") is True
@@ -128,6 +148,7 @@ def test_is_write_denied_aliases_read():
 
 # ---- tilde expansion ----
 
+
 def test_tilde_resolves_to_home(monkeypatch):
     """``~/.ssh/...`` expands ``~`` first, then checks the prefix."""
     monkeypatch.setenv("HOME", "/root")
@@ -138,6 +159,7 @@ def test_tilde_resolves_to_home(monkeypatch):
 
 # ---- unresolvable paths are NOT advised (let backend report) ----
 
+
 def test_empty_string_path_does_not_advise():
     # An empty path is malformed but we don't want to falsely advise.
     # The backend will error on it.
@@ -146,6 +168,7 @@ def test_empty_string_path_does_not_advise():
 
 
 # ---- advisory message mentions concrete risk ----
+
 
 def test_advisory_includes_path_and_reason():
     result = check_path_safety("/root/.ssh/id_rsa")

@@ -26,12 +26,14 @@ import os
 # Exact-file system sensitive paths. Mirrors
 # ``agent.file_safety.build_write_denied_paths`` minus Hermes-specific
 # entries (mcp-sandbox has no HERMES_HOME concept).
-_BLOCKED_EXACT_PATHS: frozenset[str] = frozenset({
-    "/etc/shadow",
-    "/etc/passwd",
-    "/etc/sudoers",
-    "/etc/gshadow",
-})
+_BLOCKED_EXACT_PATHS: frozenset[str] = frozenset(
+    {
+        "/etc/shadow",
+        "/etc/passwd",
+        "/etc/sudoers",
+        "/etc/gshadow",
+    }
+)
 
 
 # Path prefixes whose presence in the target's path means "this is a
@@ -71,21 +73,23 @@ _BLOCKED_PATH_PREFIXES: tuple[str, ...] = (
 # Specific filenames commonly holding secrets. The basename check fires
 # regardless of parent directory (matches hermes' project-env guard,
 # which fires for any path ending in .env, .env.local, etc.).
-_BLOCKED_BASENAMES: frozenset[str] = frozenset({
-    ".env",
-    ".env.local",
-    ".env.development",
-    ".env.production",
-    ".env.test",
-    ".env.staging",
-    ".envrc",
-    # Credential / private-key filenames inside .ssh/ — checked here too
-    # so a file at e.g. /tmp/oddity/id_rsa still triggers.
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-})
+_BLOCKED_BASENAMES: frozenset[str] = frozenset(
+    {
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        ".env.test",
+        ".env.staging",
+        ".envrc",
+        # Credential / private-key filenames inside .ssh/ — checked here too
+        # so a file at e.g. /tmp/oddity/id_rsa still triggers.
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+    }
+)
 
 
 # Public for tests / advanced callers.
@@ -165,10 +169,7 @@ def check_path_safety(path: str) -> dict:
                 "different filename."
             )
         return {
-            "warning": (
-                f"Path '{path}' (resolves to '{resolved}') is a "
-                f"{context}. {detail}"
-            ),
+            "warning": (f"Path '{path}' (resolves to '{resolved}') is a {context}. {detail}"),
             "category": category,
         }
 

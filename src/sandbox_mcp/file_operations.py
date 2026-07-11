@@ -35,8 +35,8 @@ import shlex
 from sandbox_mcp.safety import check_path_safety
 
 LINE_FMT = "{n}|{line}"
-_MAX_FILE_SIZE = 50 * 1024          # 50 KB hard cap on read
-_MAX_LINE_LENGTH = 2000            # per-line truncation
+_MAX_FILE_SIZE = 50 * 1024  # 50 KB hard cap on read
+_MAX_LINE_LENGTH = 2000  # per-line truncation
 _DEFAULT_READ_LIMIT = 500
 _MAX_READ_LIMIT = 2000
 _DEFAULT_SEARCH_LIMIT = 50
@@ -74,7 +74,7 @@ def _expand_path(path: str, backend) -> str:
             r2 = backend.exec_oneoff("_resolve_path", f"echo ~{username}")
             user_home = (r2.get("output") or "").strip()
             if user_home and user_home != f"~{username}":
-                suffix = path[1 + len(username):]
+                suffix = path[1 + len(username) :]
                 return user_home + suffix
     return path
 
@@ -104,14 +104,15 @@ def _strip_bom(text: str) -> tuple[str, bool]:
 def _strip_terminal_fence_leaks(text: str) -> str:
     """Strip terminal escape sequences that leak into captured stdout."""
     # Remove CSI sequences, OSC sequences, simple color codes.
-    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07",
-                  "", text)
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07", "", text)
 
 
 # ---- In-process linters ----------------------------------------------------
 
+
 def _lint_python_inproc(content: str) -> tuple[bool, str]:
     import ast
+
     try:
         ast.parse(content)
         return True, ""
@@ -171,24 +172,46 @@ _LINTERS_INPROC = {
 
 # ---- Binary detection ------------------------------------------------------
 
+
 def _is_binary_file(path: str, sample: bytes) -> bool:
     """Combined extension + content heuristic, matching opencode's approach."""
     ext = os.path.splitext(path)[1].lower()
     binary_exts = {
-        ".zip", ".tar", ".gz", ".exe", ".dll", ".so", ".class", ".jar",
-        ".war", ".7z", ".doc", ".docx", ".xls", ".xlsx", ".ppt",
-        ".pptx", ".odt", ".ods", ".odp", ".bin", ".dat", ".obj", ".o",
-        ".a", ".lib", ".wasm", ".pyc", ".pyo",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".exe",
+        ".dll",
+        ".so",
+        ".class",
+        ".jar",
+        ".war",
+        ".7z",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".bin",
+        ".dat",
+        ".obj",
+        ".o",
+        ".a",
+        ".lib",
+        ".wasm",
+        ".pyc",
+        ".pyo",
     }
     if ext in binary_exts:
         return True
     if not sample:
         return False
     # >30% non-printable bytes (excluding common whitespace) means binary.
-    non_printable = sum(
-        1 for b in sample
-        if b == 0 or (b < 9 or (b > 13 and b < 32))
-    )
+    non_printable = sum(1 for b in sample if b == 0 or (b < 9 or (b > 13 and b < 32)))
     return non_printable / len(sample) > 0.30
 
 
@@ -197,6 +220,7 @@ def _is_image(path: str) -> bool:
 
 
 # ---- Atomic write ---------------------------------------------------------
+
 
 def _atomic_write(backend, machine: str, path: str, content: bytes) -> dict:
     """Write content to the target file via the backend's write_file hook.
@@ -211,13 +235,18 @@ def _atomic_write(backend, machine: str, path: str, content: bytes) -> dict:
 
 # ---- Unified diff ----------------------------------------------------------
 
+
 def _unified_diff(old: str, new: str, filename: str) -> str:
     old_lines = old.splitlines(keepends=True)
     new_lines = new.splitlines(keepends=True)
-    return "".join(difflib.unified_diff(
-        old_lines, new_lines,
-        fromfile=f"a/{filename}", tofile=f"b/{filename}",
-    ))
+    return "".join(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{filename}",
+            tofile=f"b/{filename}",
+        )
+    )
 
 
 # ---- Search helpers -------------------------------------------------------
@@ -249,6 +278,7 @@ def _split_tool_diagnostics(output: str) -> tuple[str, str]:
 
 # ---- Main class ------------------------------------------------------------
 
+
 class FileOperations:
     """Read/write/patch/search via backend.exec_oneoff."""
 
@@ -257,8 +287,7 @@ class FileOperations:
 
     # ---- read ----
 
-    def read(self, path: str, machine: str, offset: int = 1,
-             limit: int = 500) -> dict:
+    def read(self, path: str, machine: str, offset: int = 1, limit: int = 500) -> dict:
         path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
         offset = max(1, int(offset))
@@ -277,25 +306,24 @@ class FileOperations:
         # Images are out of scope for the text-mode read; caller should
         # download them via the shell tool.
         if _is_image(path):
-            return {"status": "image",
-                    "hint": "Image file. Use shell to inspect (e.g. `file`)."}
+            return {"status": "image", "hint": "Image file. Use shell to inspect (e.g. `file`)."}
 
         # Sample first 4 KB for binary detection.
-        sample_result = self._backend.exec_oneoff(
-            machine, f"head -c 4096 {q_path} 2>/dev/null")
-        sample = (sample_result.get("output") or "").encode("utf-8",
-                                                            errors="replace")
+        sample_result = self._backend.exec_oneoff(machine, f"head -c 4096 {q_path} 2>/dev/null")
+        sample = (sample_result.get("output") or "").encode("utf-8", errors="replace")
         if _is_binary_file(path, sample):
-            return {"status": "binary", "file_size": file_size,
-                    "error": "Binary file cannot be displayed as text."}
+            return {
+                "status": "binary",
+                "file_size": file_size,
+                "error": "Binary file cannot be displayed as text.",
+            }
 
         end_line = offset + limit - 1
         read_cmd = f"sed -n {offset},{end_line}p {q_path}"
         result = self._backend.exec_oneoff(machine, read_cmd)
         if result.get("exit_code") not in (0, None):
             return self._suggest_similar_files(path, machine)
-        text, _bom = _strip_bom(_strip_terminal_fence_leaks(
-            result.get("output", "") or ""))
+        text, _bom = _strip_bom(_strip_terminal_fence_leaks(result.get("output", "") or ""))
 
         wc_result = self._backend.exec_oneoff(machine, f"wc -l < {q_path}")
         try:
@@ -306,15 +334,19 @@ class FileOperations:
         truncated = total_lines > end_line
         hint = None
         if truncated:
-            hint = (f"Use offset={end_line + 1} to continue reading "
-                    f"(showing {offset}-{end_line} of {total_lines} lines)")
+            hint = (
+                f"Use offset={end_line + 1} to continue reading "
+                f"(showing {offset}-{end_line} of {total_lines} lines)"
+            )
         elif total_lines > 0 and end_line >= total_lines:
             hint = f"(End of file - total {total_lines} lines)"
 
         lines = text.split("\n")
         numbered = [
-            (LINE_FMT.format(n=offset + i, line=line[:_MAX_LINE_LENGTH])
-             + ("... [truncated]" if len(line) > _MAX_LINE_LENGTH else ""))
+            (
+                LINE_FMT.format(n=offset + i, line=line[:_MAX_LINE_LENGTH])
+                + ("... [truncated]" if len(line) > _MAX_LINE_LENGTH else "")
+            )
             for i, line in enumerate(lines)
         ]
         result = {
@@ -337,9 +369,7 @@ class FileOperations:
         dirname = os.path.dirname(path) or "."
         basename = os.path.basename(path)
         q_dir = shlex.quote(dirname)
-        ls_cmd = (
-            f"ls -1 {q_dir} 2>/dev/null | head -50"
-        )
+        ls_cmd = f"ls -1 {q_dir} 2>/dev/null | head -50"
         ls_result = self._backend.exec_oneoff(machine, ls_cmd)
         candidates: list[str] = []
         if ls_result.get("exit_code") == 0 and ls_result.get("output"):
@@ -349,12 +379,10 @@ class FileOperations:
                 if not entry:
                     continue
                 le = entry.lower()
-                if (lower_q and (lower_q in le or le in lower_q
-                                 or le.startswith(lower_q[:3]))):
+                if lower_q and (lower_q in le or le in lower_q or le.startswith(lower_q[:3])):
                     candidates.append(os.path.join(dirname, entry))
             candidates = candidates[:5]
-        return {"status": "not_found", "path": path,
-                "suggestions": candidates}
+        return {"status": "not_found", "path": path, "suggestions": candidates}
 
     # ---- write ----
 
@@ -371,11 +399,15 @@ class FileOperations:
         if linter is not None:
             ok, err = linter(content)
             if not ok and err != "__SKIP__":
-                return {"status": "error",
-                        "stage": "lint_pre_write",
-                        "error": (f"Refusing to write '{path}': candidate content "
-                                  f"fails {ext} syntax validation ({err}). "
-                                  "File was NOT created or modified.")}
+                return {
+                    "status": "error",
+                    "stage": "lint_pre_write",
+                    "error": (
+                        f"Refusing to write '{path}': candidate content "
+                        f"fails {ext} syntax validation ({err}). "
+                        "File was NOT created or modified."
+                    ),
+                }
 
         # Probe on-disk file (best-effort) so we can preserve its line
         # ending and BOM. ``cat`` may fail for non-existent files; that
@@ -401,22 +433,32 @@ class FileOperations:
         write_bytes = content_to_write.encode("utf-8")
         write_result = _atomic_write(self._backend, machine, path, write_bytes)
         if write_result.get("status") != "ok":
-            return {"status": "error", "stage": "write",
-                    "error": (write_result.get("error")
-                              or write_result.get("stderr")
-                              or write_result.get("output")
-                              or "atomic write failed")}
+            return {
+                "status": "error",
+                "stage": "write",
+                "error": (
+                    write_result.get("error")
+                    or write_result.get("stderr")
+                    or write_result.get("output")
+                    or "atomic write failed"
+                ),
+            }
 
         # Post-write verification: re-read and compare to intended.
         verify = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)} 2>/dev/null")
         if verify.get("exit_code") not in (0, None):
-            return {"status": "error", "stage": "verify",
-                    "error": "could not re-read file after write"}
+            return {
+                "status": "error",
+                "stage": "verify",
+                "error": "could not re-read file after write",
+            }
         actual = verify.get("output") or ""
         if _strip_bom(actual)[0] != content_to_write:
-            return {"status": "error", "stage": "verify",
-                    "error": ("on-disk content differs from intended write; "
-                              "the patch did not persist")}
+            return {
+                "status": "error",
+                "stage": "verify",
+                "error": ("on-disk content differs from intended write; the patch did not persist"),
+            }
 
         # Post-write lint summary for structured formats (non-blocking).
         lint_summary = None
@@ -427,9 +469,12 @@ class FileOperations:
         # bytes written (returned by backend or fall back to content length)
         bytes_written = write_result.get("bytes_written", len(write_bytes))
 
-        result = {"status": "ok", "path": path,
-                   "bytes_written": bytes_written,
-                   "lint": lint_summary}
+        result = {
+            "status": "ok",
+            "path": path,
+            "bytes_written": bytes_written,
+            "lint": lint_summary,
+        }
         if advisory["warning"]:
             result["warning"] = advisory["warning"]
             result["safety_category"] = advisory["category"]
@@ -437,19 +482,25 @@ class FileOperations:
 
     # ---- patch ----
 
-    def patch(self, mode: str, machine: str, path: str = "",
-              old_string: str = "", new_string: str = "",
-              replace_all: bool = False, patch: str = "") -> dict:
+    def patch(
+        self,
+        mode: str,
+        machine: str,
+        path: str = "",
+        old_string: str = "",
+        new_string: str = "",
+        replace_all: bool = False,
+        patch: str = "",
+    ) -> dict:
         if mode == "replace":
-            return self._patch_replace(machine, path, old_string,
-                                       new_string, replace_all)
+            return self._patch_replace(machine, path, old_string, new_string, replace_all)
         if mode == "patch":
             return self._patch_apply(machine, patch)
         return {"status": "error", "error": f"Unknown patch mode: {mode}"}
 
-    def _patch_replace(self, machine: str, path: str,
-                       old_string: str, new_string: str,
-                       replace_all: bool) -> dict:
+    def _patch_replace(
+        self, machine: str, path: str, old_string: str, new_string: str, replace_all: bool
+    ) -> dict:
         path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
         result = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")
@@ -463,8 +514,7 @@ class FileOperations:
         count = original.count(old_norm)
         fuzzy = False
         if count == 0 and "\n" not in old_string:
-            match = difflib.get_close_matches(
-                old_norm, original.splitlines(), n=1, cutoff=0.6)
+            match = difflib.get_close_matches(old_norm, original.splitlines(), n=1, cutoff=0.6)
             if match:
                 old_norm = match[0]
                 count = original.count(old_norm)
@@ -472,8 +522,7 @@ class FileOperations:
         if count == 0:
             return {"status": "error", "error": "old_string not found"}
         if count > 1 and not replace_all:
-            return {"status": "error",
-                    "error": f"Multiple matches ({count}); set replace_all=true"}
+            return {"status": "error", "error": f"Multiple matches ({count}); set replace_all=true"}
         replaced = original.replace(old_norm, new_norm)
         diff = _unified_diff(original, replaced, path)
 
@@ -488,10 +537,13 @@ class FileOperations:
         write_bytes = full_content.encode("utf-8")
         write_result = _atomic_write(self._backend, machine, path, write_bytes)
         if write_result.get("status") != "ok":
-            return {"status": "error", "stage": "write",
-                    "error": (write_result.get("error")
-                              or write_result.get("output")
-                              or "patch write failed")}
+            return {
+                "status": "error",
+                "stage": "write",
+                "error": (
+                    write_result.get("error") or write_result.get("output") or "patch write failed"
+                ),
+            }
 
         # Post-write verification.
         verify = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")
@@ -504,8 +556,7 @@ class FileOperations:
         if _strip_bom(actual)[0] != expected:
             return {"status": "error", "error": "patch did not persist"}
 
-        result = {"status": "ok", "path": path, "matches": count,
-                   "fuzzy": fuzzy, "diff": diff}
+        result = {"status": "ok", "path": path, "matches": count, "fuzzy": fuzzy, "diff": diff}
         if advisory["warning"]:
             result["warning"] = advisory["warning"]
             result["safety_category"] = advisory["category"]
@@ -516,23 +567,29 @@ class FileOperations:
             return {"status": "error", "error": "patch is empty"}
         encoded = base64.b64encode(patch_text.encode("utf-8")).decode("ascii")
         result = self._backend.exec_oneoff(
-            machine, f"echo {shlex.quote(encoded)} | base64 -d | patch -p0")
+            machine, f"echo {shlex.quote(encoded)} | base64 -d | patch -p0"
+        )
         if result.get("exit_code") not in (0, None):
-            return {"status": "error",
-                    "error": result.get("stderr") or "patch failed"}
+            return {"status": "error", "error": result.get("stderr") or "patch failed"}
         return {"status": "ok"}
 
     # ---- search ----
 
-    def search(self, pattern: str, machine: str,
-               search_type: str = "content", path: str = ".",
-               file_glob: str = "", limit: int = _DEFAULT_SEARCH_LIMIT,
-               offset: int = 0, output_mode: str = "content",
-               context: int = 0) -> dict:
+    def search(
+        self,
+        pattern: str,
+        machine: str,
+        search_type: str = "content",
+        path: str = ".",
+        file_glob: str = "",
+        limit: int = _DEFAULT_SEARCH_LIMIT,
+        offset: int = 0,
+        output_mode: str = "content",
+        context: int = 0,
+    ) -> dict:
         # Validate search_type up-front; cheaper than shipping to backend.
         if search_type not in ("content", "files"):
-            return {"status": "error",
-                    "error": f"Unknown search_type: {search_type}"}
+            return {"status": "error", "error": f"Unknown search_type: {search_type}"}
 
         path = _expand_path(path, self._backend)
         offset = max(0, int(offset))
@@ -542,15 +599,21 @@ class FileOperations:
             return self._search_files(pattern, machine, path, limit, offset)
 
         return self._search_content(
-            pattern, machine, path, file_glob, limit, offset,
-            output_mode, context,
+            pattern,
+            machine,
+            path,
+            file_glob,
+            limit,
+            offset,
+            output_mode,
+            context,
         )
 
-    def _search_files(self, pattern: str, machine: str,
-                      path: str, limit: int, offset: int) -> dict:
+    def _search_files(self, pattern: str, machine: str, path: str, limit: int, offset: int) -> dict:
         """Glob-style file search via ripgrep --files with mtime sort."""
-        glob_pattern = (f"*{pattern}" if "/" not in pattern
-                       and not pattern.startswith("*") else pattern)
+        glob_pattern = (
+            f"*{pattern}" if "/" not in pattern and not pattern.startswith("*") else pattern
+        )
         fetch = limit + offset
         cmd = (
             f"set -o pipefail; "
@@ -561,19 +624,29 @@ class FileOperations:
         diagnostics, payload = _split_tool_diagnostics(result.get("output") or "")
         files = [f for f in payload.splitlines() if f]
         truncated = len(files) >= fetch or bool(diagnostics)
-        return {"status": "ok", "type": "files",
-                "results": files[offset:offset + limit],
-                "diagnostics": diagnostics or None,
-                "truncated": truncated}
+        return {
+            "status": "ok",
+            "type": "files",
+            "results": files[offset : offset + limit],
+            "diagnostics": diagnostics or None,
+            "truncated": truncated,
+        }
 
-    def _search_content(self, pattern: str, machine: str, path: str,
-                        file_glob: str, limit: int, offset: int,
-                        output_mode: str, context: int) -> dict:
+    def _search_content(
+        self,
+        pattern: str,
+        machine: str,
+        path: str,
+        file_glob: str,
+        limit: int,
+        offset: int,
+        output_mode: str,
+        context: int,
+    ) -> dict:
         """ripgrep-based content search with diagnostics separation."""
         q_pattern = shlex.quote(pattern)
         q_path = shlex.quote(path)
-        cmd_parts = ["set -o pipefail; rg", "--line-number",
-                      "--no-heading", "--with-filename"]
+        cmd_parts = ["set -o pipefail; rg", "--line-number", "--no-heading", "--with-filename"]
         if context > 0:
             cmd_parts += ["-C", str(context)]
         if file_glob:
@@ -583,19 +656,23 @@ class FileOperations:
         elif output_mode == "count":
             cmd_parts.append("-c")
         cmd_parts += [q_pattern, q_path, "|", "head", "-n", str(limit + offset)]
-        result = self._backend.exec_oneoff(machine, " ".join(cmd_parts),
-                                           timeout=60)
+        result = self._backend.exec_oneoff(machine, " ".join(cmd_parts), timeout=60)
         diagnostics, payload = _split_tool_diagnostics(result.get("output") or "")
         if result.get("exit_code") == 2 and not payload.strip():
-            return {"status": "error",
-                    "error": diagnostics.strip() or "search failed",
-                    "results": []}
+            return {
+                "status": "error",
+                "error": diagnostics.strip() or "search failed",
+                "results": [],
+            }
 
         if output_mode == "files_only":
             all_files = [f for f in payload.splitlines() if f]
-            return {"status": "ok", "type": "files",
-                    "results": all_files[offset:offset + limit],
-                    "diagnostics": diagnostics or None}
+            return {
+                "status": "ok",
+                "type": "files",
+                "results": all_files[offset : offset + limit],
+                "diagnostics": diagnostics or None,
+            }
         if output_mode == "count":
             counts: dict[str, int] = {}
             for line in payload.splitlines():
@@ -607,9 +684,12 @@ class FileOperations:
                         counts[path_part] = int(num)
                     except ValueError:
                         continue
-            return {"status": "ok", "type": "count",
-                    "results": counts,
-                    "diagnostics": diagnostics or None}
+            return {
+                "status": "ok",
+                "type": "count",
+                "results": counts,
+                "diagnostics": diagnostics or None,
+            }
 
         # content mode
         results: list[dict] = []
@@ -631,8 +711,12 @@ class FileOperations:
                 "0 results. Content search is line-oriented and does not run "
                 "ripgrep with --multiline, so `\\n` in the regex does not match "
                 "line breaks. Use context=N to inspect neighbors, or escape "
-                "as `\\\\n` for a literal backslash+n.")
-        return {"status": "ok", "type": "content",
-                "results": results[offset:offset + limit],
-                "diagnostics": diagnostics or None,
-                "warning": warning}
+                "as `\\\\n` for a literal backslash+n."
+            )
+        return {
+            "status": "ok",
+            "type": "content",
+            "results": results[offset : offset + limit],
+            "diagnostics": diagnostics or None,
+            "warning": warning,
+        }

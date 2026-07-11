@@ -38,10 +38,16 @@ class DockerExecProcess:
     def __init__(self, container, cmd):
         self._container = container
         self._exec_id = container.client.api.exec_create(
-            container.id, cmd, stdin=True, stdout=True, stderr=True,
+            container.id,
+            cmd,
+            stdin=True,
+            stdout=True,
+            stderr=True,
         )["Id"]
         self._sock = container.client.api.exec_start(
-            self._exec_id, detach=False, socket=True,
+            self._exec_id,
+            detach=False,
+            socket=True,
         )
         self._raw = self._sock._sock
 
@@ -54,10 +60,8 @@ class DockerExecProcess:
         self._stdout_r_fd, self._stdout_w_fd = os.pipe()
         self.stdout = open(self._stdout_r_fd, "rb", buffering=0)
 
-        self._demux_thread = threading.Thread(
-            target=self._demux_loop, daemon=True)
-        self._stdin_thread = threading.Thread(
-            target=self._stdin_loop, daemon=True)
+        self._demux_thread = threading.Thread(target=self._demux_loop, daemon=True)
+        self._stdin_thread = threading.Thread(target=self._stdin_loop, daemon=True)
         self._done = threading.Event()
         self._demux_thread.start()
         self._stdin_thread.start()
@@ -66,6 +70,7 @@ class DockerExecProcess:
 
     def _demux_loop(self):
         import struct
+
         sock = self._sock
         sock._sock.settimeout(300)  # 5 min idle timeout
         out_fd = self._stdout_w_fd
@@ -205,17 +210,24 @@ class DockerBackend(Backend):
                 command="sleep infinity",
             )
         except APIError as e:
-            return TargetInfo(name=name, backend="docker", status="error",
-                              purpose=purpose,
-                              error=str(e.explanation or e))
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="error",
+                purpose=purpose,
+                error=str(e.explanation or e),
+            )
         except ImageNotFound:
-            return TargetInfo(name=name, backend="docker", status="error",
-                              purpose=purpose,
-                              error=f"Image {image} not found")
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="error",
+                purpose=purpose,
+                error=f"Image {image} not found",
+            )
 
         self._started_at[name] = time.time()
-        return TargetInfo(name=name, backend="docker", status="running",
-                          purpose=purpose)
+        return TargetInfo(name=name, backend="docker", status="running", purpose=purpose)
 
     def start(self, name: str) -> TargetInfo:
         container_name = self._container_name(name)
@@ -225,8 +237,7 @@ class DockerBackend(Backend):
             self._started_at[name] = self._started_at.get(name, time.time())
             return TargetInfo(name=name, backend="docker", status="running")
         except (APIError, NotFound) as e:
-            return TargetInfo(name=name, backend="docker", status="error",
-                              error=str(e))
+            return TargetInfo(name=name, backend="docker", status="error", error=str(e))
 
     def stop(self, name: str) -> TargetInfo:
         container_name = self._container_name(name)
@@ -235,8 +246,7 @@ class DockerBackend(Backend):
             container.stop(timeout=10)
             return TargetInfo(name=name, backend="docker", status="stopped")
         except (APIError, NotFound) as e:
-            return TargetInfo(name=name, backend="docker", status="error",
-                              error=str(e))
+            return TargetInfo(name=name, backend="docker", status="error", error=str(e))
 
     def remove(self, name: str) -> dict:
         container_name = self._container_name(name)
@@ -255,7 +265,8 @@ class DockerBackend(Backend):
             status = container.attrs.get("State", {}).get("Status", "unknown")
             running = status == "running"
             return TargetInfo(
-                name=name, backend="docker",
+                name=name,
+                backend="docker",
                 status="running" if running else "stopped",
             )
         except (APIError, NotFound):
@@ -269,21 +280,22 @@ class DockerBackend(Backend):
         try:
             container = self._ensure_client().containers.get(container_name)
             repo, tag_part = ([*tag.rsplit(":", 1), ""])[:2]
-            container.commit(repository=repo or "sandbox-mcp",
-                             tag=tag_part or "latest")
+            container.commit(repository=repo or "sandbox-mcp", tag=tag_part or "latest")
             return {"image_tag": tag, "status": "committed"}
         except (APIError, NotFound) as e:
             return {"error": str(e), "image_tag": tag, "status": "error"}
 
-    def build(self, image_tag: str, dockerfile: str,
-              context_dir: str | None = None) -> dict:
+    def build(self, image_tag: str, dockerfile: str, context_dir: str | None = None) -> dict:
         ctx = context_dir or "."
         df_path = Path(dockerfile)
         if not df_path.is_absolute():
             df_path = Path(ctx) / df_path
         if not df_path.exists():
-            return {"error": f"Dockerfile not found: {df_path}",
-                    "image_tag": image_tag, "status": "error"}
+            return {
+                "error": f"Dockerfile not found: {df_path}",
+                "image_tag": image_tag,
+                "status": "error",
+            }
         try:
             self._ensure_client().images.build(
                 path=str(df_path.parent),
@@ -300,8 +312,7 @@ class DockerBackend(Backend):
         dirname = str(Path(missing_path).parent)
         basename = Path(missing_path).name
         ls_cmd = (
-            f"ls -1 {shlex.quote(dirname)} 2>/dev/null | "
-            f"grep -i {shlex.quote(basename)} | head -5"
+            f"ls -1 {shlex.quote(dirname)} 2>/dev/null | grep -i {shlex.quote(basename)} | head -5"
         )
         result = self.exec_oneoff(name, ls_cmd, timeout=10)
         if result.get("exit_code") not in (0, None) or not result.get("output"):
@@ -332,12 +343,14 @@ class DockerBackend(Backend):
             if name_prefix and not name.startswith(name_prefix):
                 continue
             state = c.attrs.get("State", {})
-            result.append({
-                "name": name,
-                "status": state.get("Status", "unknown"),
-                "image": c.image.tags[0] if c.image.tags else (c.image.short_id or "unknown"),
-                "created": c.attrs.get("Created", ""),
-            })
+            result.append(
+                {
+                    "name": name,
+                    "status": state.get("Status", "unknown"),
+                    "image": c.image.tags[0] if c.image.tags else (c.image.short_id or "unknown"),
+                    "created": c.attrs.get("Created", ""),
+                }
+            )
         result.sort(key=lambda x: x["created"], reverse=True)
         return result
 
@@ -355,12 +368,14 @@ class DockerBackend(Backend):
         for img in images:
             tags = img.tags if img.tags else [f"<none>:{img.short_id}"]
             for tag in tags:
-                result.append({
-                    "tag": tag,
-                    "image_id": img.short_id,
-                    "created": img.attrs.get("Created", ""),
-                    "size_mb": round(img.attrs.get("Size", 0) / (1024 * 1024), 1),
-                })
+                result.append(
+                    {
+                        "tag": tag,
+                        "image_id": img.short_id,
+                        "created": img.attrs.get("Created", ""),
+                        "size_mb": round(img.attrs.get("Size", 0) / (1024 * 1024), 1),
+                    }
+                )
         return result
 
     # ---- shell / exec ----
@@ -383,11 +398,12 @@ class DockerBackend(Backend):
         try:
             exit_code, output = container.exec_run(
                 cmd=["bash", "-c", command],
-                stdout=True, stderr=True, demux=False,
+                stdout=True,
+                stderr=True,
+                demux=False,
             )
         except APIError as e:
-            return {"exit_code": -1, "output": "",
-                    "stderr": str(e.explanation or e)}
+            return {"exit_code": -1, "output": "", "stderr": str(e.explanation or e)}
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
         return {"exit_code": exit_code, "output": output or "", "stderr": ""}
@@ -414,8 +430,11 @@ class DockerBackend(Backend):
         if parent != "/":
             mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
             if mkdir.get("exit_code") not in (0, None):
-                return {"status": "error", "stage": "mkdir",
-                        "error": mkdir.get("stderr") or "mkdir failed"}
+                return {
+                    "status": "error",
+                    "stage": "mkdir",
+                    "error": mkdir.get("stderr") or "mkdir failed",
+                }
 
         # Build a tar archive in memory containing the file.
         buf = io.BytesIO()
@@ -431,19 +450,24 @@ class DockerBackend(Backend):
         tmp_dir = f"/tmp/.sandbox-mcp-write-{uuid.uuid4().hex[:8]}"
         mkdir_tmp = self.exec_oneoff(name, f"mkdir -p {shlex.quote(tmp_dir)}")
         if mkdir_tmp.get("exit_code") not in (0, None):
-            return {"status": "error", "stage": "mkdir_tmp",
-                    "error": mkdir_tmp.get("stderr") or "mkdir failed"}
+            return {
+                "status": "error",
+                "stage": "mkdir_tmp",
+                "error": mkdir_tmp.get("stderr") or "mkdir failed",
+            }
 
         try:
             ok = container.put_archive(tmp_dir, tar_bytes)
         except APIError as e:
             self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
-            return {"status": "error", "stage": "put_archive",
-                    "error": str(e.explanation or e)}
+            return {"status": "error", "stage": "put_archive", "error": str(e.explanation or e)}
         if not ok:
             self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
-            return {"status": "error", "stage": "put_archive",
-                    "error": "put_archive returned False"}
+            return {
+                "status": "error",
+                "stage": "put_archive",
+                "error": "put_archive returned False",
+            }
 
         # Atomic rename onto the target path.
         rename = self.exec_oneoff(
@@ -453,8 +477,10 @@ class DockerBackend(Backend):
         # Best-effort cleanup of the temp directory.
         self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
         if rename.get("exit_code") not in (0, None):
-            return {"status": "error", "stage": "rename",
-                    "error": rename.get("stderr") or "rename failed"}
+            return {
+                "status": "error",
+                "stage": "rename",
+                "error": rename.get("stderr") or "rename failed",
+            }
 
-        return {"status": "ok", "path": path,
-                "bytes_written": len(content)}
+        return {"status": "ok", "path": path, "bytes_written": len(content)}

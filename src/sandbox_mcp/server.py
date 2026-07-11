@@ -30,24 +30,29 @@ logger = logging.getLogger(__name__)
 TOOL_DEFINITIONS = [
     {
         "name": "sandbox_shell_exec",
-        "description": ("Execute a shell command. wait=true (default) blocks until "
-                        "completion or timeout. wait=false returns after "
-                        "confirming execution started."),
+        "description": (
+            "Execute a shell command. wait=true (default) blocks until "
+            "completion or timeout. wait=false returns after "
+            "confirming execution started."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "command": {"type": "string",
-                            "description": "Shell command to execute"},
-                "shell_id": {"type": "string",
-                             "description": "Specific shell (default: machine's default shell)"},
-                "machine": {"type": "string",
-                            "description": "Machine name (default: default machine)"},
-                "wait": {"type": "boolean",
-                         "description": "Wait for completion (default: true)"},
-                "timeout": {"type": "integer",
-                            "description": "Seconds to wait (default: 30)"},
-                "max_output": {"type": "integer",
-                               "description": "Max output bytes (default: 50000)"},
+                "command": {"type": "string", "description": "Shell command to execute"},
+                "shell_id": {
+                    "type": "string",
+                    "description": "Specific shell (default: machine's default shell)",
+                },
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name (default: default machine)",
+                },
+                "wait": {"type": "boolean", "description": "Wait for completion (default: true)"},
+                "timeout": {"type": "integer", "description": "Seconds to wait (default: 30)"},
+                "max_output": {
+                    "type": "integer",
+                    "description": "Max output bytes (default: 50000)",
+                },
             },
             "required": ["command"],
         },
@@ -55,12 +60,11 @@ TOOL_DEFINITIONS = [
     {
         "name": "sandbox_shell_read",
         "description": "Read new output from a shell (non-blocking). Detects "
-                       "command completion via markers.",
+        "command completion via markers.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "shell_id": {"type": "string",
-                             "description": "Shell to read from"},
+                "shell_id": {"type": "string", "description": "Shell to read from"},
             },
             "required": ["shell_id"],
         },
@@ -72,29 +76,32 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "machine": {"type": "string",
-                            "description": "Machine name (default: default machine)"},
-                "offset": {"type": "integer",
-                           "description": "Start line (1-indexed, default: 1)"},
-                "limit": {"type": "integer",
-                          "description": "Max lines (default: 500, max: 2000)"},
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name (default: default machine)",
+                },
+                "offset": {"type": "integer", "description": "Start line (1-indexed, default: 1)"},
+                "limit": {"type": "integer", "description": "Max lines (default: 500, max: 2000)"},
             },
             "required": ["path"],
         },
     },
     {
         "name": "sandbox_file_write",
-        "description": ("Write content to a file, replacing existing. "
-                        "Creates parent dirs. Runs syntax check for known "
-                        "extensions."),
+        "description": (
+            "Write content to a file, replacing existing. "
+            "Creates parent dirs. Runs syntax check for known "
+            "extensions."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "content": {"type": "string",
-                            "description": "Complete file content"},
-                "machine": {"type": "string",
-                            "description": "Machine name (default: default machine)"},
+                "content": {"type": "string", "description": "Complete file content"},
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name (default: default machine)",
+                },
             },
             "required": ["path", "content"],
         },
@@ -102,23 +109,20 @@ TOOL_DEFINITIONS = [
     {
         "name": "sandbox_file_patch",
         "description": "Targeted find-and-replace edits with fuzzy matching. "
-                       "mode=replace or mode=patch.",
+        "mode=replace or mode=patch.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "mode": {"type": "string", "enum": ["replace", "patch"]},
-                "path": {"type": "string",
-                         "description": "File path (replace mode)"},
-                "old_string": {"type": "string",
-                               "description": "Text to find (replace mode)"},
-                "new_string": {"type": "string",
-                               "description": "Replacement text (replace mode)"},
-                "replace_all": {"type": "boolean",
-                                "description": "Replace all (default: false)"},
-                "patch": {"type": "string",
-                          "description": "Patch content (patch mode)"},
-                "machine": {"type": "string",
-                            "description": "Machine name (default: default machine)"},
+                "path": {"type": "string", "description": "File path (replace mode)"},
+                "old_string": {"type": "string", "description": "Text to find (replace mode)"},
+                "new_string": {"type": "string", "description": "Replacement text (replace mode)"},
+                "replace_all": {"type": "boolean", "description": "Replace all (default: false)"},
+                "patch": {"type": "string", "description": "Patch content (patch mode)"},
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name (default: default machine)",
+                },
             },
             "required": ["mode"],
         },
@@ -130,39 +134,47 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "pattern": {"type": "string"},
-                "search_type": {"type": "string", "enum": ["content", "files"],
-                                "description": "default: content"},
-                "machine": {"type": "string",
-                            "description": "Machine name (default: default machine)"},
-                "path": {"type": "string",
-                         "description": "Directory to search (default: cwd)"},
-                "file_glob": {"type": "string",
-                              "description": "Filter files (e.g. *.py)"},
-                "limit": {"type": "integer",
-                          "description": "Max results (default: 50)"},
-                "offset": {"type": "integer",
-                           "description": "Skip first N (default: 0)"},
-                "output_mode": {"type": "string",
-                                "enum": ["content", "files_only", "count"],
-                                "description": "default: content"},
-                "context": {"type": "integer",
-                            "description": "Context lines (default: 0)"},
+                "search_type": {
+                    "type": "string",
+                    "enum": ["content", "files"],
+                    "description": "default: content",
+                },
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name (default: default machine)",
+                },
+                "path": {"type": "string", "description": "Directory to search (default: cwd)"},
+                "file_glob": {"type": "string", "description": "Filter files (e.g. *.py)"},
+                "limit": {"type": "integer", "description": "Max results (default: 50)"},
+                "offset": {"type": "integer", "description": "Skip first N (default: 0)"},
+                "output_mode": {
+                    "type": "string",
+                    "enum": ["content", "files_only", "count"],
+                    "description": "default: content",
+                },
+                "context": {"type": "integer", "description": "Context lines (default: 0)"},
             },
             "required": ["pattern"],
         },
     },
     {
         "name": "sandbox_env",
-        "description": ("Environment management. Call action=help to discover "
-                        "operations or action=status for current state. "
-                        "Other actions are discovered on demand."),
+        "description": (
+            "Environment management. Call action=help to discover "
+            "operations or action=status for current state. "
+            "Other actions are discovered on demand."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string",
-                           "description": "Operation name. Start with help or status."},
-                "params": {"type": "object",
-                           "description": "Operation params documented by help actions."},
+                "action": {
+                    "type": "string",
+                    "description": "Operation name. Start with help or status.",
+                },
+                "params": {
+                    "type": "object",
+                    "description": "Operation params documented by help actions.",
+                },
             },
             "required": ["action"],
         },
@@ -191,13 +203,13 @@ class SandboxServer:
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
-        self.sandbox_env = SandboxEnv(self.machines, self.shells,
-                                      self._docker_backend, self._ssh_backend)
+        self.sandbox_env = SandboxEnv(
+            self.machines, self.shells, self._docker_backend, self._ssh_backend
+        )
         self.audit = audit if audit is not None else DEFAULT_AUDIT_LOGGER
 
     def list_tools(self):
-        return [ToolDef(t["name"], t["description"], t["inputSchema"])
-                for t in TOOL_DEFINITIONS]
+        return [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
 
     def call_tool(self, name, arguments):
         handler = getattr(self, f"_handle_{name}", None)
@@ -212,14 +224,22 @@ class SandboxServer:
         except Exception as e:
             status = "error"
             logger.exception("call_tool %s failed", name)
-            return [TextContent(json.dumps({
-                "error": str(e), "type": type(e).__name__,
-            }))]
+            return [
+                TextContent(
+                    json.dumps(
+                        {
+                            "error": str(e),
+                            "type": type(e).__name__,
+                        }
+                    )
+                )
+            ]
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
             machine = arguments.get("machine") if isinstance(arguments, dict) else None
-            details = {k: v for k, v in (arguments or {}).items()
-                       if k != "machine" and k != "action"}
+            details = {
+                k: v for k, v in (arguments or {}).items() if k != "machine" and k != "action"
+            }
             self.audit.record(
                 machine=machine,
                 action=name,
@@ -246,12 +266,10 @@ class SandboxServer:
         else:
             machine = self._resolve_machine(args)
             backend = self.machines.get_backend(machine)
-            sid = self.shells.get_or_create_default(
-                machine, lambda: backend.open_shell(machine))
+            sid = self.shells.get_or_create_default(machine, lambda: backend.open_shell(machine))
             session = self.shells.get(sid)
 
-        return session.send(args["command"], wait=wait, timeout=timeout,
-                            max_output=max_output)
+        return session.send(args["command"], wait=wait, timeout=timeout, max_output=max_output)
 
     def _handle_sandbox_shell_read(self, args):
         session = self.shells.get(args["shell_id"])
@@ -268,9 +286,12 @@ class SandboxServer:
     def _handle_sandbox_file_read(self, args):
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
-        return fops.read(args["path"], machine,
-                         offset=args.get("offset", 1),
-                         limit=min(args.get("limit", 500), 2000))
+        return fops.read(
+            args["path"],
+            machine,
+            offset=args.get("offset", 1),
+            limit=min(args.get("limit", 500), 2000),
+        )
 
     def _handle_sandbox_file_write(self, args):
         machine = self._resolve_machine(args)
@@ -281,7 +302,8 @@ class SandboxServer:
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.patch(
-            mode=args["mode"], machine=machine,
+            mode=args["mode"],
+            machine=machine,
             path=args.get("path", ""),
             old_string=args.get("old_string", ""),
             new_string=args.get("new_string", ""),
@@ -293,7 +315,8 @@ class SandboxServer:
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.search(
-            pattern=args["pattern"], machine=machine,
+            pattern=args["pattern"],
+            machine=machine,
             search_type=args.get("search_type", "content"),
             path=args.get("path", "."),
             file_glob=args.get("file_glob", ""),
@@ -314,6 +337,7 @@ class SandboxServer:
 def main():
     """Entry point: run the MCP server over stdio."""
     import asyncio
+
     try:
         import mcp.types as types
         from mcp.server import Server
@@ -322,16 +346,14 @@ def main():
         logging.error("mcp package not installed. Run: pip install mcp")
         return
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
 
     @mcp_server.list_tools()
     async def handle_list_tools():
         return [
-            types.Tool(name=t.name, description=t.description,
-                       inputSchema=t.inputSchema)
+            types.Tool(name=t.name, description=t.description, inputSchema=t.inputSchema)
             for t in server.list_tools()
         ]
 
@@ -341,8 +363,9 @@ def main():
 
     async def run():
         async with stdio_server() as (read_stream, write_stream):
-            await mcp_server.run(read_stream, write_stream,
-                                 mcp_server.create_initialization_options())
+            await mcp_server.run(
+                read_stream, write_stream, mcp_server.create_initialization_options()
+            )
 
     asyncio.run(run())
 
@@ -368,8 +391,7 @@ def main_http():
         from starlette.routing import Route
     except ImportError:
         logging.error(
-            "HTTP mode requires uvicorn and starlette. Run: "
-            "pip install 'sandbox-mcp[http]'"
+            "HTTP mode requires uvicorn and starlette. Run: pip install 'sandbox-mcp[http]'"
         )
         return
 
@@ -386,8 +408,7 @@ def main_http():
     @mcp_server.list_tools()
     async def handle_list_tools():
         return [
-            types.Tool(name=t.name, description=t.description,
-                       inputSchema=t.inputSchema)
+            types.Tool(name=t.name, description=t.description, inputSchema=t.inputSchema)
             for t in server.list_tools()
         ]
 
@@ -398,7 +419,8 @@ def main_http():
     async def handle_sse(scope, receive, send):
         async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
             await mcp_server.run(
-                read_stream, write_stream,
+                read_stream,
+                write_stream,
                 mcp_server.create_initialization_options(),
             )
 
