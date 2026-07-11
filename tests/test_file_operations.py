@@ -124,13 +124,12 @@ def test_write_atomic_write_uses_stdin(fops, backend):
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
     write_call = backend.exec_oneoff.call_args_list[1]
     cmd = write_call.args[1]
-    stdin = write_call.kwargs.get("stdin_data")
     assert "base64 -d" in cmd
     assert "mktemp" in cmd
     assert "mv -f" in cmd
-    assert stdin is not None
-    # The stdin payload is the base64 of the literal "hello\n".
-    assert base64.b64decode(stdin.strip()).decode() == "hello\n"
+    # The base64 payload is inlined in the command via echo.
+    encoded = base64.b64encode(b"hello\n").decode("ascii")
+    assert encoded in cmd
 
 
 def test_write_post_write_verify_detects_mismatch(fops, backend):
@@ -153,10 +152,9 @@ def test_write_preserves_crlf_when_target_has_it(fops, backend):
         {"exit_code": 0, "output": "16\n", "stderr": ""},             # wc -c
     ]
     fops.write("/tmp/x.txt", "old\nnew\n", machine="dev")
-    # The atomic-write stdin must contain CRLF-encoded new content.
-    write_call = backend.exec_oneoff.call_args_list[1]
-    decoded = base64.b64decode(write_call.kwargs["stdin_data"].strip())
-    assert decoded == b"old\r\nnew\r\n"
+    cmd = backend.exec_oneoff.call_args_list[1].args[1]
+    expected_b64 = base64.b64encode(b"old\r\nnew\r\n").decode("ascii")
+    assert expected_b64 in cmd
 
 
 def test_write_preserves_bom_when_target_has_it(fops, backend):
@@ -167,9 +165,8 @@ def test_write_preserves_bom_when_target_has_it(fops, backend):
         {"exit_code": 0, "output": "6\n", "stderr": ""},             # wc -c
     ]
     fops.write("/tmp/x.txt", "hello\n", machine="dev")
-    decoded = base64.b64decode(
-        backend.exec_oneoff.call_args_list[1].kwargs["stdin_data"].strip())
-    assert decoded.startswith(b"\xef\xbb\xbf")
+    cmd = backend.exec_oneoff.call_args_list[1].args[1]
+    assert base64.b64encode(b"\xef\xbb\xbfhello\n").decode("ascii") in cmd
 
 
 # ---- patch ----
@@ -234,9 +231,10 @@ def test_patch_replace_mode_normalizes_crlf(fops, backend):
     result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="beta", new_string="BETA")
     assert result["status"] == "ok"
-    decoded = base64.b64decode(
-        backend.exec_oneoff.call_args_list[1].kwargs["stdin_data"].strip())
-    assert b"\r\n" in decoded
+    cmd = backend.exec_oneoff.call_args_list[1].args[1]
+    # The atomic_write command should contain the base64-encoded CRLF content.
+    expected_b64 = base64.b64encode(b"alpha\r\nBETA\r\ngamma\r\n").decode("ascii")
+    assert expected_b64 in cmd
 
 
 def test_patch_apply_mode(fops, backend):

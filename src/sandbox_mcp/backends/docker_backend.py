@@ -15,7 +15,6 @@ from __future__ import annotations
 import contextlib
 import os
 import shlex
-import struct
 import threading
 import time
 from pathlib import Path
@@ -66,7 +65,7 @@ class DockerExecProcess:
     # ---- demux: sock → pipe (reads framed stdout, writes clean bytes) ----
 
     def _demux_loop(self):
-
+        import struct
         sock = self._sock
         sock._sock.settimeout(300)  # 5 min idle timeout
         out_fd = self._stdout_w_fd
@@ -332,86 +331,14 @@ class DockerBackend(Backend):
             container = self._ensure_client().containers.get(container_name)
         except NotFound:
             return {"exit_code": -1, "output": "", "stderr": "container not found"}
-
-        if stdin_data is None:
-            try:
-                exit_code, output = container.exec_run(
-                    cmd=["bash", "-c", command],
-                    stdout=True, stderr=True, demux=False,
-                )
-            except APIError as e:
-                return {"exit_code": -1, "output": "",
-                        "stderr": str(e.explanation or e)}
-            if isinstance(output, bytes):
-                output = output.decode("utf-8", errors="replace")
-            return {"exit_code": exit_code, "output": output or "", "stderr": ""}
-
-        # stdin_data path: socket-based exec via the low-level Docker API.
-        # Docker's multiplexed-stream protocol prefixes each chunk with
-        # an 8-byte frame header: stream_type(1) + padding(3) + payload_len(uint32 BE).
-        import socket as _socket
-
         try:
-            exec_id = self._ensure_client().api.exec_create(
-                container.id,
-                ["bash", "-c", command],
-                stdin=True, stdout=True, stderr=True,
-            )["Id"]
-            sock = self._ensure_client().api.exec_start(
-                exec_id, detach=False, socket=True,
+            exit_code, output = container.exec_run(
+                cmd=["bash", "-c", command],
+                stdout=True, stderr=True, demux=False,
             )
         except APIError as e:
             return {"exit_code": -1, "output": "",
                     "stderr": str(e.explanation or e)}
-
-        try:
-            encoded = stdin_data.encode("utf-8")
-            sock._sock.sendall(encoded)
-            sock._sock.shutdown(_socket.SHUT_WR)
-
-            stdout_data = b""
-            stderr_data = b""
-            sock._sock.settimeout(timeout)
-
-            while True:
-                header = b""
-                try:
-                    while len(header) < 8:
-                        chunk = sock._sock.recv(8 - len(header))
-                        if not chunk:
-                            break
-                        header += chunk
-                except TimeoutError:
-                    break
-                except OSError:
-                    break
-                if len(header) < 8:
-                    break
-
-                payload_len = struct.unpack(">I", header[4:8])[0]
-                payload = b""
-                try:
-                    while len(payload) < payload_len:
-                        chunk = sock._sock.recv(payload_len - len(payload))
-                        if not chunk:
-                            break
-                        payload += chunk
-                except TimeoutError:
-                    break
-
-                if header[0] == 1:
-                    stdout_data += payload
-                elif header[0] == 2:
-                    stderr_data += payload
-
-            info = self._ensure_client().api.exec_inspect(exec_id)
-            exit_code = info.get("ExitCode")
-        finally:
-            with contextlib.suppress(Exception):
-                sock.close()
-
-        return {
-            "exit_code": exit_code,
-            "output": stdout_data.decode("utf-8", errors="replace"),
-            "stderr": stderr_data.decode("utf-8", errors="replace"),
-        }
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        return {"exit_code": exit_code, "output": output or "", "stderr": ""}

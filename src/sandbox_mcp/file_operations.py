@@ -202,17 +202,15 @@ def _is_image(path: str) -> bool:
 def _atomic_write(backend, machine: str, path: str, content_b64: str) -> dict:
     """Stage content via base64 into a temp file in the target dir, then mv.
 
-    The mv is atomic on POSIX (and on every backend FS we run on); a
-    crash between the temp write and the mv leaves the original file
-    intact. Same-directory placement guarantees a real rename, not a
-    non-atomic cross-device copy.
+    The content is embedded in the shell command string (not passed over
+    stdin) because base64's character set is fully safe for single-quoted
+    shell arguments: ``A-Za-z0-9+/=``.
     """
     q_path = shlex.quote(path)
     parent = os.path.dirname(path) or "."
     q_parent = shlex.quote(parent)
     tmp_tmpl = shlex.quote(f".sandbox-mcp-tmp.XXXXXX.{uuid.uuid4().hex[:8]}")
-    # ``echo`` of a base64 string with a trailing newline decodes cleanly.
-    # ``trap`` guarantees the temp is removed on any failure path.
+    q_content = shlex.quote(content_b64)
     script = (
         "set -e; "
         f"d={q_parent}; "
@@ -221,11 +219,11 @@ def _atomic_write(backend, machine: str, path: str, content_b64: str) -> dict:
         f'(tmp="$d/.sandbox-mcp-tmp.$$"; : > "$tmp"; echo "$tmp")); '
         '[ -n "$tmp" ] || { echo "atomic write: could not create temp file" >&2; exit 1; }; '
         'trap \'rm -f "$tmp"\' EXIT; '
-        'base64 -d > "$tmp"; '
+        f"echo {q_content} | base64 -d > \"$tmp\"; "
         'mv -f "$tmp" "$t"; '
         "trap - EXIT"
     )
-    return backend.exec_oneoff(machine, script, stdin_data=content_b64 + "\n")
+    return backend.exec_oneoff(machine, script)
 
 
 # ---- Unified diff ----------------------------------------------------------
