@@ -27,9 +27,18 @@ class ShellSession:
     TAIL_SIZE = 46080       # ~45KB tail ring buffer
     DEFAULT_MAX_OUTPUT = 50000  # 50KB default output limit
 
-    def __init__(self, args):
+    def __init__(self, args=None, process=None):
+        """Create a shell session.
+
+        Either *args* (a ``subprocess.Popen`` argument list) or *process*
+        (an object with ``.stdin``, ``.stdout``, ``.poll``, ``.kill``,
+        ``.wait`` methods matching ``subprocess.Popen``) must be provided.
+        The *process* form is used by backends that provide their own
+        process-like handle (e.g. the Docker backend's SDK-based exec).
+        """
         self._args = args
-        self._process = None
+        self._process = process
+        self._external = process is not None
         self._lock = threading.Lock()
         self._state = "idle"
         self._last_command = None
@@ -52,6 +61,12 @@ class ShellSession:
         self._start()
 
     def _start(self):
+        if self._external:
+            # External process was already started by the caller.
+            self._state = "idle"
+            self._drain_thread = threading.Thread(target=self._drain, daemon=True)
+            self._drain_thread.start()
+            return
         self._process = subprocess.Popen(
             self._args,
             stdin=subprocess.PIPE,

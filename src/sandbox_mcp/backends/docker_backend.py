@@ -13,7 +13,10 @@ the same machine).
 from __future__ import annotations
 
 import contextlib
+import os
 import shlex
+import struct
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +25,120 @@ from docker.errors import APIError, ImageNotFound, NotFound
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
 from sandbox_mcp.shell_session import ShellSession
+
+
+class DockerExecProcess:
+    """Wrapper around a Docker SDK exec socket that mimics ``subprocess.Popen``.
+
+    This allows :class:`ShellSession` to use an SDK-based persistent exec
+    (created via the Docker API) instead of a ``docker exec -i`` subprocess,
+    so that ``open_shell`` works correctly when the Docker daemon is on a
+    different host.
+    """
+
+    def __init__(self, container, cmd):
+        self._container = container
+        self._exec_id = container.client.api.exec_create(
+            container.id, cmd, stdin=True, stdout=True, stderr=True,
+        )["Id"]
+        self._sock = container.client.api.exec_start(
+            self._exec_id, detach=False, socket=True,
+        )
+        self._raw = self._sock._sock
+
+        # Pipe for stdin: ShellSession writes → pipe → _stdin_loop → sock
+        self._stdin_r_fd, self._stdin_w_fd = os.pipe()
+        self.stdin = open(self._stdin_w_fd, "wb", buffering=0)
+        # Keep the original fd as well so _stdin_loop can os.read on it.
+
+        # Pipe for stdout: _demux_loop reads sock, strips frame, writes → pipe → ShellSession
+        self._stdout_r_fd, self._stdout_w_fd = os.pipe()
+        self.stdout = open(self._stdout_r_fd, "rb", buffering=0)
+
+        self._demux_thread = threading.Thread(
+            target=self._demux_loop, daemon=True)
+        self._stdin_thread = threading.Thread(
+            target=self._stdin_loop, daemon=True)
+        self._done = threading.Event()
+        self._demux_thread.start()
+        self._stdin_thread.start()
+
+    # ---- demux: sock → pipe (reads framed stdout, writes clean bytes) ----
+
+    def _demux_loop(self):
+
+        sock = self._sock
+        sock._sock.settimeout(300)  # 5 min idle timeout
+        out_fd = self._stdout_w_fd
+        try:
+            while True:
+                header = b""
+                try:
+                    while len(header) < 8:
+                        chunk = sock.read(8 - len(header))
+                        if not chunk:
+                            return
+                        header += chunk
+                        # Actually use os.read since SocketIO.read can be finicky
+                except (OSError, AttributeError):
+                    return
+                payload_len = struct.unpack(">I", header[4:8])[0]
+                payload = b""
+                try:
+                    while len(payload) < payload_len:
+                        chunk = sock.read(payload_len - len(payload))
+                        if not chunk:
+                            break
+                        payload += chunk
+                except (OSError, AttributeError):
+                    return
+                if header[0] == 1:
+                    os.write(out_fd, payload)
+                # stderr (2) is merged per subprocess.STDOUT convention.
+        finally:
+            os.close(out_fd)
+            self._done.set()
+
+    # ---- stdin pipe → sock ----
+
+    def _stdin_loop(self):
+        fd = self._stdin_r_fd
+        try:
+            while True:
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                self._raw.sendall(data)
+        finally:
+            os.close(fd)
+
+    # ---- Popen-compatible interface ----
+
+    def poll(self):
+        info = self._container.client.api.exec_inspect(self._exec_id)
+        if info.get("Running", True):
+            return None
+        return info.get("ExitCode", -1)
+
+    def kill(self):
+        # Close the write end of stdin pipe first, so _stdin_loop sees EOF
+        # and exits cleanly.
+        with contextlib.suppress(OSError):
+            os.close(self._stdin_w_fd)
+        # Close the stdout pipe: the drain thread will see EOF.
+        with contextlib.suppress(OSError):
+            os.close(self._stdout_r_fd)
+        # Close the docker socket; this causes _demux_loop's sock.read() to
+        # return empty, the loop exits, and _done is set.
+        with contextlib.suppress(Exception):
+            self._sock.close()
+        self._done.wait(timeout=2)
+
+    def wait(self, timeout=None):
+        self._done.wait(timeout=timeout)
 
 
 class DockerBackend(Backend):
@@ -201,7 +318,12 @@ class DockerBackend(Backend):
 
     def open_shell(self, name: str) -> ShellSession:
         container_name = self._container_name(name)
-        return ShellSession(["docker", "exec", "-i", container_name, "bash"])
+        try:
+            container = self._ensure_client().containers.get(container_name)
+        except NotFound:
+            raise RuntimeError(f"Container {container_name} not found")
+        process = DockerExecProcess(container, ["bash"])
+        return ShellSession(process=process)
 
     def exec_oneoff(self, name: str, command: str, timeout: int = 30,
                     stdin_data: str | None = None) -> dict:
@@ -228,7 +350,6 @@ class DockerBackend(Backend):
         # Docker's multiplexed-stream protocol prefixes each chunk with
         # an 8-byte frame header: stream_type(1) + padding(3) + payload_len(uint32 BE).
         import socket as _socket
-        import struct
 
         try:
             exec_id = self._ensure_client().api.exec_create(

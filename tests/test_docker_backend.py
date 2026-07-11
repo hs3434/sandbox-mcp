@@ -92,13 +92,39 @@ def test_docker_build(docker_backend, tmp_path):
         assert result["status"] == "built"
 
 
-def test_docker_open_shell(docker_backend):
-    """open_shell creates a ShellSession with docker exec args."""
+def test_docker_open_shell(docker_backend, mock_client):
+    """open_shell creates a ShellSession backed by DockerExecProcess."""
+    container = mock_client.containers.get.return_value
+    container.id = "c123"
+    api = mock_client.api
+    api.exec_create.return_value = {"Id": "e789"}
+
+    # Create a pipe so the DockerExecProcess has real fds.
+    import os
+    r_out, w_out = os.pipe()
+    r_in, w_in = os.pipe()
+
+    # The sock._sock needs to be a real socket-like for sendall/recv.
+    # Use a real socket for the mock.
+    import socket
+    a, b = socket.socketpair()
+
+    socket_mock = MagicMock()
+    socket_mock._sock = b
+    api.exec_start.return_value = socket_mock
+
     shell = docker_backend.open_shell("dev")
-    assert "docker" in shell._args[0]
-    assert "exec" in shell._args
-    assert "sandbox-dev" in shell._args
+    assert shell._external is True
+    assert shell._process is not None
+    assert hasattr(shell._process, "stdin")
+    assert hasattr(shell._process, "stdout")
     shell.close()
+    os.close(r_out)
+    os.close(w_out)
+    os.close(r_in)
+    os.close(w_in)
+    a.close()
+    b.close()
 
 
 def test_docker_exec_oneoff_no_stdin(docker_backend, mock_client):
