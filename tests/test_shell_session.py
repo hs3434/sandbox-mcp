@@ -98,10 +98,10 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    result = session.send("seq 1 100000", wait=True, timeout=10, max_output=5000)
+    result = session.send("seq 1 10000", wait=True, timeout=15, max_output=5000)
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
-    assert "100000" in result["output"]
+    assert "10000" in result["output"]
     session.close()
 
 

@@ -211,7 +211,10 @@ class SandboxServer:
             return [TextContent(json.dumps(result, ensure_ascii=False))]
         except Exception as e:
             status = "error"
-            return [TextContent(json.dumps({"error": str(e)}))]
+            logger.exception("call_tool %s failed", name)
+            return [TextContent(json.dumps({
+                "error": str(e), "type": type(e).__name__,
+            }))]
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
             machine = arguments.get("machine") if isinstance(arguments, dict) else None

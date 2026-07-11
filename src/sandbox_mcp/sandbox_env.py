@@ -7,8 +7,11 @@ Discovered via docker_help/ssh_help: backend-specific lifecycle.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 HELP_RESPONSE = {
     "default_actions": [
@@ -173,7 +176,8 @@ class SandboxEnv:
         try:
             return handler(params or {})
         except Exception as e:
-            return {"error": str(e)}
+            logger.exception("sandbox_env.%s failed", action)
+            return {"error": str(e), "type": type(e).__name__}
 
     # ---- discovery ----
 
