@@ -347,5 +347,73 @@ def main():
     asyncio.run(run())
 
 
+def main_http():
+    """Entry point: run the MCP server as an HTTP SSE service.
+
+    Listens on ``SANDBOX_MCP_HOST`` (default ``0.0.0.0``) and
+    ``SANDBOX_MCP_PORT`` (default ``8010``).  The SSE endpoint is
+    at ``/sse`` and the client message endpoint at ``/messages/``.
+    """
+    import os
+
+    host = os.environ.get("SANDBOX_MCP_HOST", "0.0.0.0")
+    port = int(os.environ.get("SANDBOX_MCP_PORT", "8010"))
+
+    try:
+        import mcp.types as types
+        import uvicorn
+        from mcp.server import Server
+        from mcp.server.sse import SseServerTransport
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+    except ImportError:
+        logging.error(
+            "HTTP mode requires uvicorn and starlette. Run: "
+            "pip install 'sandbox-mcp[http]'"
+        )
+        return
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
+
+    server = SandboxServer()
+    mcp_server = Server("sandbox-mcp")
+    sse = SseServerTransport("/messages/")
+
+    @mcp_server.list_tools()
+    async def handle_list_tools():
+        return [
+            types.Tool(name=t.name, description=t.description,
+                       inputSchema=t.inputSchema)
+            for t in server.list_tools()
+        ]
+
+    @mcp_server.call_tool()
+    async def handle_call_tool(name, arguments):
+        return server.call_tool(name, arguments)
+
+    async def handle_sse(scope, receive, send):
+        async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
+            await mcp_server.run(
+                read_stream, write_stream,
+                mcp_server.create_initialization_options(),
+            )
+
+    async def handle_messages(scope, receive, send):
+        await sse.handle_post_message(scope, receive, send)
+
+    app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+        ],
+    )
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     main()

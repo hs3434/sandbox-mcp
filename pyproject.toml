@@ -19,9 +19,14 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.10.0",
 ]
+http = [
+    "uvicorn>=0.27.0",
+    "starlette>=0.36.0",
+]
 
 [project.scripts]
 sandbox-mcp = "sandbox_mcp.server:main"
+sandbox-mcp-http = "sandbox_mcp.server:main_http"
 
 [tool.setuptools.packages.find]
 where = ["src"]
