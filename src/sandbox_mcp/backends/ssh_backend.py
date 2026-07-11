@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import shlex
 import shutil
 import subprocess
@@ -152,36 +151,44 @@ class SSHBackend(Backend):
             return {"exit_code": None, "output": "", "stderr": "timeout"}
 
     def write_file(self, name, path, content):
-        """Atomic write via base64-over-stdin + mv.
+        """Atomic write by streaming content through SSH stdin.
 
-        The SSH backend has no native file-copy API, so we use the
-        shell's stdin to pipe content past the command-line ARG_MAX
-        limit. ``subprocess.run(input=...)`` handles the stdin pipe
-        transparently.
+        Content goes directly over the SSH channel to a remote
+        ``cat > tmp; mv -f tmp path`` script, bypassing the command-line
+        ARG_MAX limit entirely. The remote ``set -e`` ensures the script
+        aborts on any error.
         """
-        import base64
-        import uuid
+        import os as _os
 
-        parent = os.path.dirname(path) or "/"
+        parent = _os.path.dirname(path) or "/"
         if parent != "/":
             mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
             if mkdir.get("exit_code") not in (0, None):
                 return {"status": "error", "stage": "mkdir",
                         "error": mkdir.get("stderr") or "mkdir failed"}
 
-        tmp_dir = f"/tmp/.sandbox-mcp-write-{uuid.uuid4().hex[:8]}"
-        encoded = base64.b64encode(content).decode("ascii")
-        filename = os.path.basename(path)
-        cmd = (
+        script = (
             "set -e; "
-            f"d={shlex.quote(tmp_dir)}; "
-            'mkdir -p "$d"; '
-            f"echo {shlex.quote(encoded)} | base64 -d > \"$d/{shlex.quote(filename)}\"; "
-            f"mv -f \"$d/{shlex.quote(filename)}\" {shlex.quote(path)}; "
-            'rm -rf "$d"'
+            f"t={shlex.quote(path)}; "
+            f'tmp=$(mktemp -p "${{t%/*}}" .sandbox-mcp-tmp.XXXXXX 2>/dev/null || '
+            'mktemp .sandbox-mcp-tmp.XXXXXX 2>/dev/null); '
+            '[ -n "$tmp" ] || { echo "atomic write: mktemp failed" >&2; exit 1; }; '
+            'cat > "$tmp"; '
+            'mv -f "$tmp" "$t"; '
+            'rm -f "$tmp"'
         )
-        result = self.exec_oneoff(name, cmd, timeout=60)
-        if result.get("exit_code") not in (0, None):
+        try:
+            result = subprocess.run(
+                [*self._ssh_base_args(name), "bash", "-c", script],
+                input=content,
+                capture_output=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "stage": "write", "error": "timeout"}
+        if result.returncode != 0:
             return {"status": "error", "stage": "write",
-                    "error": result.get("stderr") or "write failed"}
-        return {"status": "ok", "path": path, "bytes_written": len(content)}
+                    "error": (result.stderr or result.stdout
+                              or "atomic write failed")}
+        return {"status": "ok", "path": path,
+                "bytes_written": len(content)}

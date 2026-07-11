@@ -51,3 +51,36 @@ def test_ssh_open_shell(ssh_backend):
         shell = ssh_backend.open_shell("remote")
         assert "ssh" in shell._args[0]
         shell.close()
+
+
+def test_ssh_write_file_streams_content_via_stdin(ssh_backend):
+    """write_file pipes content over SSH stdin (no shell ARG_MAX)."""
+    ssh_backend._targets["remote"] = {
+        "host": "h", "user": "u", "port": 22, "key": None,
+    }
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        result = ssh_backend.write_file("remote", "/tmp/x.txt", b"hello world\n")
+    assert result["status"] == "ok"
+    assert result["bytes_written"] == 12
+    # Verify subprocess.run was called with content as stdin
+    call = mock_run.call_args
+    assert call.kwargs["input"] == b"hello world\n"
+    # The command should set -e + mktemp + cat > + mv
+    cmd = call.args[0][-1]  # last positional arg is the bash -c command
+    assert "set -e" in cmd
+    assert "cat >" in cmd
+    assert "mv -f" in cmd
+
+
+def test_ssh_write_file_propagates_error(ssh_backend):
+    ssh_backend._targets["remote"] = {
+        "host": "h", "user": "u", "port": 22, "key": None,
+    }
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="permission denied",
+        )
+        result = ssh_backend.write_file("remote", "/tmp/x.txt", b"hi")
+    assert result["status"] == "error"
+    assert "permission denied" in result["error"]
