@@ -35,12 +35,12 @@ def docker_target(server):
         pytest.skip(f"Cannot create Docker container: {data['error']}")
     server.call_tool("sandbox_env", {
         "action": "default_set",
-        "params": {"target": "test-integration"},
+        "params": {"machine": "test-integration"},
     })
     yield server
     server.call_tool("sandbox_env", {
         "action": "docker_remove",
-        "params": {"target": "test-integration"},
+        "params": {"machine": "test-integration"},
     })
 
 
@@ -80,7 +80,7 @@ def test_shell_exec_wait_false_then_read(docker_target):
 
     list_result = docker_target.call_tool("sandbox_env", {
         "action": "shell_list",
-        "params": {"target": "test-integration"},
+        "params": {"machine": "test-integration"},
     })
     shells = json.loads(list_result[0].text)
     default_shell = next((s for s in shells if s["is_default"]), None)
@@ -113,15 +113,15 @@ def test_sandbox_env_status(docker_target):
     """sandbox_env status shows the target."""
     result = docker_target.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["default_target"] == "test-integration"
-    assert len(data["targets"]) == 1
+    assert data["default_machine"] == "test-integration"
+    assert len(data["machines"]) == 1
 
 
 def test_docker_commit(docker_target):
     """Commit container state to a new image."""
     result = docker_target.call_tool("sandbox_env", {
         "action": "docker_commit",
-        "params": {"target": "test-integration",
+        "params": {"machine": "test-integration",
                    "image_tag": "sandbox-test-snapshot:latest"},
     })
     data = json.loads(result[0].text)

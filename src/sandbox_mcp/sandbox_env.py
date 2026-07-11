@@ -1,7 +1,7 @@
 """sandbox_env: progressive-discovery environment management.
 
 Default actions advertised via tools/list: help, status.
-Discovered via help: default_set, shell_new/list/remove.
+Discovered via help: machine_list, default_set, shell_new/list/remove.
 Discovered via docker_help/ssh_help: backend-specific lifecycle.
 """
 
@@ -15,22 +15,29 @@ HELP_RESPONSE = {
         {"action": "help",
          "description": "Discover common management actions and backend help entries."},
         {"action": "status",
-         "description": "Show current state: default target, target list, shell list."},
+         "description": "Show current state: default machine, machine list, shell list."},
     ],
     "operations": [
         {
+            "action": "machine_list",
+            "description": ("List all registered machines with backend, status, "
+                            "purpose, shell count, and uptime. Lighter than status "
+                            "(no shell details)."),
+            "example": {},
+        },
+        {
             "action": "default_set",
-            "description": ("Set default target or default shell. Pass target to set "
-                            "the default target. Pass shell_id to set that shell as "
-                            "its target's default shell."),
-            "optional": {"target": "string", "shell_id": "string"},
-            "requires": "Exactly one of target or shell_id",
-            "example": {"target": "dev"},
+            "description": ("Set default machine or default shell. Pass machine to set "
+                            "the default machine. Pass shell_id to set that shell as "
+                            "its machine's default shell."),
+            "optional": {"machine": "string", "shell_id": "string"},
+            "requires": "Exactly one of machine or shell_id",
+            "example": {"machine": "dev"},
         },
         {
             "action": "shell_new",
-            "description": "Create an additional shell session on a target.",
-            "optional": {"target": "string", "purpose": "string"},
+            "description": "Create an additional shell session on a machine.",
+            "optional": {"machine": "string", "purpose": "string"},
         },
         {
             "action": "shell_remove",
@@ -40,17 +47,17 @@ HELP_RESPONSE = {
         },
         {
             "action": "shell_list",
-            "description": "List all shells, optionally filtered by target.",
-            "optional": {"target": "string"},
+            "description": "List all shells, optionally filtered by machine.",
+            "optional": {"machine": "string"},
         },
     ],
     "more_help": {
-        "docker_help": "Discover Docker target actions: run/build/commit/stop/start/remove",
-        "ssh_help": "Discover SSH target actions: connect/disconnect/reconnect/remove",
+        "docker_help": "Discover Docker machine actions: run/build/commit/stop/start/remove",
+        "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
     },
     "note": ("Core tools are directly exposed as sandbox_shell_exec, "
              "sandbox_shell_read, and sandbox_file_read/write/patch/search. "
-             "Target-aware tools support optional target."),
+             "Machine-aware tools support optional machine."),
 }
 
 
@@ -79,27 +86,27 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_commit",
             "description": "Save container state as a new image.",
-            "required": {"target": "string"},
+            "required": {"machine": "string"},
             "optional": {"image_tag": "string - auto-generated if omitted"},
             "returns": {"image_tag": "string", "status": "committed"},
         },
         {
             "action": "docker_stop",
             "description": ("Stop container. State preserved, can docker_start to resume."),
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "stopped"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "stopped"},
         },
         {
             "action": "docker_start",
             "description": "Start a stopped container.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "running"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "running"},
         },
         {
             "action": "docker_remove",
-            "description": ("Stop and remove container. Closes all shells for the target."),
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "removed"},
+            "description": ("Stop and remove container. Closes all shells for the machine."),
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "removed"},
         },
     ]
 }
@@ -123,30 +130,37 @@ SSH_HELP_RESPONSE = {
         {
             "action": "ssh_disconnect",
             "description": "Close SSH connection. Remote machine is not affected.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "stopped"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "stopped"},
         },
         {
             "action": "ssh_reconnect",
             "description": "Re-establish SSH connection. Shells are lost on disconnect.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "running"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "running"},
         },
         {
             "action": "ssh_remove",
-            "description": "Unregister SSH target. Remote machine is not affected.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "removed"},
+            "description": "Unregister SSH machine. Remote machine is not affected.",
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "removed"},
         },
     ]
 }
+
+
+def _format_uptime(created_at: float) -> str:
+    uptime_s = int(time.time() - created_at)
+    if uptime_s > 60:
+        return f"{uptime_s // 3600}h{(uptime_s % 3600) // 60}m"
+    return f"{uptime_s}s"
 
 
 class SandboxEnv:
     """Dispatches sandbox_env actions and generates help responses."""
 
     def __init__(self, targets, shells, docker_backend, ssh_backend):
-        self._targets = targets
+        self._machines = targets
         self._shells = shells
         self._docker = docker_backend
         self._ssh = ssh_backend
@@ -172,29 +186,26 @@ class SandboxEnv:
     def _op_ssh_help(self, params):
         return SSH_HELP_RESPONSE
 
-    def _op_status(self, params):
-        default = self._targets.get_default()
-        targets = []
-        for name in self._targets.list_targets():
-            info = self._targets.get_info(name)
-            entry = self._targets._targets.get(name, {})
-            created_at = entry.get("created_at", time.time())
-            uptime_s = int(time.time() - created_at)
-            if uptime_s > 60:
-                uptime = f"{uptime_s // 3600}h{(uptime_s % 3600) // 60}m"
-            else:
-                uptime = f"{uptime_s}s"
-            shell_count = len(self._shells.list_shells(target=name))
-            targets.append({
+    def _op_machine_list(self, params):
+        """Lighter-weight alternative to status: machines only, no shells."""
+        machines = []
+        for name in self._machines.list_machines():
+            info = self._machines.get_info(name)
+            machines.append({
                 "name": name,
                 "backend": info.backend,
                 "status": info.status,
-                "purpose": entry.get("purpose", ""),
-                "shells": shell_count,
-                "uptime": uptime,
+                "purpose": info.purpose or "",
+                "shells": len(self._shells.list_shells(machine=name)),
+                "uptime": _format_uptime(self._machines.get_created_at(name)),
             })
-        shells = self._shells.list_shells()
-        return {"default_target": default, "targets": targets, "shells": shells}
+        return {"machines": machines}
+
+    def _op_status(self, params):
+        default = self._machines.get_default()
+        machines = self._op_machine_list({})["machines"]
+        return {"default_machine": default, "machines": machines,
+                "shells": self._shells.list_shells()}
 
     # ---- general ----
 
@@ -205,28 +216,28 @@ class SandboxEnv:
         return None
 
     def _op_default_set(self, params):
-        has_target = "target" in params
+        has_machine = "machine" in params
         has_shell = "shell_id" in params
-        if has_target == has_shell:
-            return {"error": "Pass exactly one of target or shell_id"}
-        if has_target:
-            target = self._targets.resolve_target(params["target"])
-            self._targets.set_default(target)
-            return {"default_target": target}
-        shell_target = self._shells.get_target(params["shell_id"])
+        if has_machine == has_shell:
+            return {"error": "Pass exactly one of machine or shell_id"}
+        if has_machine:
+            machine = self._machines.resolve_machine(params["machine"])
+            self._machines.set_default(machine)
+            return {"default_machine": machine}
+        shell_target = self._shells.get_machine(params["shell_id"])
         if shell_target is None:
             return {"error": f"Unknown shell_id: {params['shell_id']}"}
         self._shells.set_default(params["shell_id"])
-        return {"default_shell": {"target": shell_target,
+        return {"default_shell": {"machine": shell_target,
                                   "shell_id": params["shell_id"]}}
 
     def _op_shell_new(self, params):
-        target = self._targets.resolve_target(params.get("target"))
-        backend = self._targets.get_backend(target)
-        session = backend.open_shell(target)
-        shell_id = self._shells.open(target, session,
+        machine = self._machines.resolve_machine(params.get("machine"))
+        backend = self._machines.get_backend(machine)
+        session = backend.open_shell(machine)
+        shell_id = self._shells.open(machine, session,
                                      purpose=params.get("purpose", "manual"))
-        return {"shell_id": shell_id, "target": target}
+        return {"shell_id": shell_id, "machine": machine}
 
     def _op_shell_remove(self, params):
         if "shell_id" not in params:
@@ -236,7 +247,7 @@ class SandboxEnv:
         return {"error": f"Unknown shell_id: {params['shell_id']}"}
 
     def _op_shell_list(self, params):
-        return self._shells.list_shells(target=params.get("target"))
+        return self._shells.list_shells(machine=params.get("machine"))
 
     # ---- docker ----
 
@@ -244,7 +255,7 @@ class SandboxEnv:
         err = self._require(params, "name", "image", "purpose")
         if err is not None:
             return {"error": err}
-        info = self._targets.register(
+        info = self._machines.register(
             params["name"], self._docker,
             purpose=params.get("purpose", ""),
             image=params["image"],
@@ -263,53 +274,53 @@ class SandboxEnv:
                                   params.get("context_dir"))
 
     def _op_docker_commit(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_commit only supported on Docker targets"}
-        return backend.commit(target, params.get("image_tag"))
+            return {"error": "docker_commit only supported on Docker machines"}
+        return backend.commit(machine, params.get("image_tag"))
 
     def _op_docker_stop(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_stop only supported on Docker targets"}
-        self._shells.close_all_for_target(target)
-        info = backend.stop(target)
-        return {"target": target, "status": info.status}
+            return {"error": "docker_stop only supported on Docker machines"}
+        self._shells.close_all_for_machine(machine)
+        info = backend.stop(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_docker_start(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_start only supported on Docker targets"}
-        info = backend.start(target)
-        return {"target": target, "status": info.status}
+            return {"error": "docker_start only supported on Docker machines"}
+        info = backend.start(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_docker_remove(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_remove only supported on Docker targets"}
-        self._shells.close_all_for_target(target)
-        result = backend.remove(target)
-        self._targets.unregister(target)
+            return {"error": "docker_remove only supported on Docker machines"}
+        self._shells.close_all_for_machine(machine)
+        result = backend.remove(machine)
+        self._machines.unregister(machine)
         return result
 
     # ---- ssh ----
@@ -318,7 +329,7 @@ class SandboxEnv:
         err = self._require(params, "name", "host", "user", "purpose")
         if err is not None:
             return {"error": err}
-        info = self._targets.register(
+        info = self._machines.register(
             params["name"], self._ssh,
             purpose=params.get("purpose", ""),
             host=params["host"],
@@ -329,40 +340,40 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 
     def _op_ssh_disconnect(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_disconnect only supported on SSH targets"}
-        self._shells.close_all_for_target(target)
-        info = backend.stop(target)
-        return {"target": target, "status": info.status}
+            return {"error": "ssh_disconnect only supported on SSH machines"}
+        self._shells.close_all_for_machine(machine)
+        info = backend.stop(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_ssh_reconnect(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_reconnect only supported on SSH targets"}
-        info = backend.start(target)
-        return {"target": target, "status": info.status}
+            return {"error": "ssh_reconnect only supported on SSH machines"}
+        info = backend.start(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_ssh_remove(self, params):
-        err = self._require(params, "target")
+        err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_remove only supported on SSH targets"}
-        self._shells.close_all_for_target(target)
-        result = backend.remove(target)
-        self._targets.unregister(target)
+            return {"error": "ssh_remove only supported on SSH machines"}
+        self._shells.close_all_for_machine(machine)
+        result = backend.remove(machine)
+        self._machines.unregister(machine)
         return result

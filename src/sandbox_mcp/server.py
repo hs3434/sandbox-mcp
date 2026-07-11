@@ -37,9 +37,9 @@ TOOL_DEFINITIONS = [
                 "command": {"type": "string",
                             "description": "Shell command to execute"},
                 "shell_id": {"type": "string",
-                             "description": "Specific shell (default: target's default shell)"},
-                "target": {"type": "string",
-                           "description": "Target name (default: default target)"},
+                             "description": "Specific shell (default: machine's default shell)"},
+                "machine": {"type": "string",
+                            "description": "Machine name (default: default machine)"},
                 "wait": {"type": "boolean",
                          "description": "Wait for completion (default: true)"},
                 "timeout": {"type": "integer",
@@ -70,8 +70,8 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "target": {"type": "string",
-                           "description": "Target name (default: default target)"},
+                "machine": {"type": "string",
+                            "description": "Machine name (default: default machine)"},
                 "offset": {"type": "integer",
                            "description": "Start line (1-indexed, default: 1)"},
                 "limit": {"type": "integer",
@@ -91,8 +91,8 @@ TOOL_DEFINITIONS = [
                 "path": {"type": "string"},
                 "content": {"type": "string",
                             "description": "Complete file content"},
-                "target": {"type": "string",
-                           "description": "Target name (default: default target)"},
+                "machine": {"type": "string",
+                            "description": "Machine name (default: default machine)"},
             },
             "required": ["path", "content"],
         },
@@ -115,8 +115,8 @@ TOOL_DEFINITIONS = [
                                 "description": "Replace all (default: false)"},
                 "patch": {"type": "string",
                           "description": "Patch content (patch mode)"},
-                "target": {"type": "string",
-                           "description": "Target name (default: default target)"},
+                "machine": {"type": "string",
+                            "description": "Machine name (default: default machine)"},
             },
             "required": ["mode"],
         },
@@ -130,8 +130,8 @@ TOOL_DEFINITIONS = [
                 "pattern": {"type": "string"},
                 "search_type": {"type": "string", "enum": ["content", "files"],
                                 "description": "default: content"},
-                "target": {"type": "string",
-                           "description": "Target name (default: default target)"},
+                "machine": {"type": "string",
+                            "description": "Machine name (default: default machine)"},
                 "path": {"type": "string",
                          "description": "Directory to search (default: cwd)"},
                 "file_glob": {"type": "string",
@@ -185,11 +185,11 @@ class SandboxServer:
     """Core sandbox MCP server logic (transport-agnostic)."""
 
     def __init__(self):
-        self.targets = TargetRegistry()
+        self.machines = TargetRegistry()
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
-        self.sandbox_env = SandboxEnv(self.targets, self.shells,
+        self.sandbox_env = SandboxEnv(self.machines, self.shells,
                                       self._docker_backend, self._ssh_backend)
 
     def list_tools(self):
@@ -206,8 +206,8 @@ class SandboxServer:
         except Exception as e:
             return [TextContent(json.dumps({"error": str(e)}))]
 
-    def _resolve_target(self, arguments):
-        return self.targets.resolve_target(arguments.get("target"))
+    def _resolve_machine(self, arguments):
+        return self.machines.resolve_machine(arguments.get("machine"))
 
     # ---- shell handlers ----
 
@@ -222,10 +222,10 @@ class SandboxServer:
             if session is None:
                 return {"error": f"Unknown shell_id: {shell_id}"}
         else:
-            target = self._resolve_target(args)
-            backend = self.targets.get_backend(target)
+            machine = self._resolve_machine(args)
+            backend = self.machines.get_backend(machine)
             sid = self.shells.get_or_create_default(
-                target, lambda: backend.open_shell(target))
+                machine, lambda: backend.open_shell(machine))
             session = self.shells.get(sid)
 
         return session.send(args["command"], wait=wait, timeout=timeout,
@@ -239,27 +239,27 @@ class SandboxServer:
 
     # ---- file handlers ----
 
-    def _get_file_ops(self, target):
-        backend = self.targets.get_backend(target)
+    def _get_file_ops(self, machine):
+        backend = self.machines.get_backend(machine)
         return FileOperations(backend)
 
     def _handle_sandbox_file_read(self, args):
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
-        return fops.read(args["path"], target,
+        machine = self._resolve_machine(args)
+        fops = self._get_file_ops(machine)
+        return fops.read(args["path"], machine,
                          offset=args.get("offset", 1),
                          limit=min(args.get("limit", 500), 2000))
 
     def _handle_sandbox_file_write(self, args):
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
-        return fops.write(args["path"], args["content"], target)
+        machine = self._resolve_machine(args)
+        fops = self._get_file_ops(machine)
+        return fops.write(args["path"], args["content"], machine)
 
     def _handle_sandbox_file_patch(self, args):
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
+        machine = self._resolve_machine(args)
+        fops = self._get_file_ops(machine)
         return fops.patch(
-            mode=args["mode"], target=target,
+            mode=args["mode"], machine=machine,
             path=args.get("path", ""),
             old_string=args.get("old_string", ""),
             new_string=args.get("new_string", ""),
@@ -268,10 +268,10 @@ class SandboxServer:
         )
 
     def _handle_sandbox_file_search(self, args):
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
+        machine = self._resolve_machine(args)
+        fops = self._get_file_ops(machine)
         return fops.search(
-            pattern=args["pattern"], target=target,
+            pattern=args["pattern"], machine=machine,
             search_type=args.get("search_type", "content"),
             path=args.get("path", "."),
             file_glob=args.get("file_glob", ""),

@@ -31,14 +31,14 @@ def test_close_shell():
     mock_shell.close.assert_called_once()
 
 
-def test_list_shells_by_target():
+def test_list_shells_by_machine():
     reg = ShellRegistry()
     mock1 = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
     mock2 = MagicMock(state="running", purpose="tests", uptime=0, last_command="pytest")
     reg.open("dev", mock1)
     reg.open("dev", mock2, purpose="tests")
     reg.open("db", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
-    dev_shells = reg.list_shells(target="dev")
+    dev_shells = reg.list_shells(machine="dev")
     assert len(dev_shells) == 2
 
 
@@ -65,20 +65,20 @@ def test_set_default_shell():
     reg = ShellRegistry()
     shell1 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
     shell2 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
-    target = reg.set_default(shell2)
-    assert target == "dev"
-    assert reg.get_target(shell2) == "dev"
+    machine = reg.set_default(shell2)
+    assert machine == "dev"
+    assert reg.get_machine(shell2) == "dev"
     assert reg.get_default_id("dev") == shell2
-    shells = reg.list_shells(target="dev")
+    shells = reg.list_shells(machine="dev")
     assert next(s for s in shells if s["shell_id"] == shell1)["is_default"] is False
     assert next(s for s in shells if s["shell_id"] == shell2)["is_default"] is True
 
 
-def test_close_all_for_target():
+def test_close_all_for_machine():
     reg = ShellRegistry()
     reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
     reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
     reg.open("db", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
-    reg.close_all_for_target("dev")
-    assert len(reg.list_shells(target="dev")) == 0
+    reg.close_all_for_machine("dev")
+    assert len(reg.list_shells(machine="dev")) == 0
     assert len(reg.list_shells()) == 1

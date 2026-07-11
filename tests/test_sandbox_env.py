@@ -7,11 +7,11 @@ from sandbox_mcp.sandbox_env import SandboxEnv
 
 @pytest.fixture
 def sandbox_env():
-    targets = MagicMock()
+    machines = MagicMock()
     shells = MagicMock()
     docker_backend = MagicMock()
     ssh_backend = MagicMock()
-    return SandboxEnv(targets, shells, docker_backend, ssh_backend)
+    return SandboxEnv(machines, shells, docker_backend, ssh_backend)
 
 
 def test_help_returns_operations_and_pointers(sandbox_env):
@@ -21,6 +21,7 @@ def test_help_returns_operations_and_pointers(sandbox_env):
     assert default_actions == ["help", "status"]
     assert "operations" in result
     actions = [op["action"] for op in result["operations"]]
+    assert "machine_list" in actions
     assert "default_set" in actions
     assert "shell_new" in actions
     assert "shell_remove" in actions
@@ -50,38 +51,52 @@ def test_ssh_help_returns_ssh_ops(sandbox_env):
     assert "ssh_remove" in actions
 
 
-def test_default_set_sets_default_target(sandbox_env):
-    sandbox_env._targets.resolve_target.return_value = "dev"
-    result = sandbox_env.dispatch("default_set", {"target": "dev"})
-    sandbox_env._targets.set_default.assert_called_once_with("dev")
-    assert result == {"default_target": "dev"}
+def test_default_set_sets_default_machine(sandbox_env):
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    result = sandbox_env.dispatch("default_set", {"machine": "dev"})
+    sandbox_env._machines.set_default.assert_called_once_with("dev")
+    assert result == {"default_machine": "dev"}
 
 
 def test_default_set_sets_default_shell(sandbox_env):
-    sandbox_env._shells.get_target.return_value = "dev"
+    sandbox_env._shells.get_machine.return_value = "dev"
     result = sandbox_env.dispatch("default_set", {"shell_id": "sh_abc"})
-    sandbox_env._shells.get_target.assert_called_once_with("sh_abc")
+    sandbox_env._shells.get_machine.assert_called_once_with("sh_abc")
     sandbox_env._shells.set_default.assert_called_once_with("sh_abc")
-    assert result == {"default_shell": {"target": "dev", "shell_id": "sh_abc"}}
+    assert result == {"default_shell": {"machine": "dev", "shell_id": "sh_abc"}}
 
 
-def test_default_set_rejects_both_target_and_shell(sandbox_env):
+def test_default_set_rejects_both_machine_and_shell(sandbox_env):
     result = sandbox_env.dispatch("default_set",
-                                  {"target": "dev", "shell_id": "sh_abc"})
+                                  {"machine": "dev", "shell_id": "sh_abc"})
     assert "error" in result
 
 
+def test_machine_list_returns_machines(sandbox_env):
+    sandbox_env._machines.list_machines.return_value = ["dev", "db"]
+    info_a = MagicMock(name="dev", backend="docker", status="running", purpose="x")
+    info_b = MagicMock(name="db", backend="docker", status="running", purpose="y")
+    sandbox_env._machines.get_info.side_effect = [info_a, info_b]
+    sandbox_env._machines.get_created_at.return_value = 0
+    sandbox_env._shells.list_shells.return_value = []
+    result = sandbox_env.dispatch("machine_list", {})
+    assert "machines" in result
+    assert len(result["machines"]) == 2
+    assert result["machines"][0]["name"] == "dev"
+    assert result["machines"][1]["name"] == "db"
+
+
 def test_status_returns_state(sandbox_env):
-    sandbox_env._targets.get_default.return_value = "dev"
-    sandbox_env._targets.list_targets.return_value = ["dev"]
+    sandbox_env._machines.get_default.return_value = "dev"
+    sandbox_env._machines.list_machines.return_value = ["dev"]
     info = MagicMock(name="dev", backend="docker", status="running",
                      purpose="test", shells=0, uptime="")
-    sandbox_env._targets.get_info.return_value = info
-    sandbox_env._targets._targets = {"dev": {"created_at": 0, "purpose": "test"}}
+    sandbox_env._machines.get_info.return_value = info
+    sandbox_env._machines.get_created_at.return_value = 0
     sandbox_env._shells.list_shells.return_value = []
     result = sandbox_env.dispatch("status", {})
-    assert result["default_target"] == "dev"
-    assert len(result["targets"]) == 1
+    assert result["default_machine"] == "dev"
+    assert len(result["machines"]) == 1
     assert "shells" in result
 
 
@@ -89,15 +104,15 @@ def test_shell_new(sandbox_env):
     backend = MagicMock()
     shell = MagicMock()
     backend.open_shell.return_value = shell
-    sandbox_env._targets.resolve_target.return_value = "dev"
-    sandbox_env._targets.get_backend.return_value = backend
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
     sandbox_env._shells.open.return_value = "sh_abc"
     result = sandbox_env.dispatch("shell_new",
-                                  {"target": "dev", "purpose": "server"})
+                                  {"machine": "dev", "purpose": "server"})
     backend.open_shell.assert_called_once_with("dev")
     sandbox_env._shells.open.assert_called_once_with("dev", shell,
                                                      purpose="server")
-    assert result == {"shell_id": "sh_abc", "target": "dev"}
+    assert result == {"shell_id": "sh_abc", "machine": "dev"}
 
 
 def test_shell_remove(sandbox_env):
@@ -108,7 +123,7 @@ def test_shell_remove(sandbox_env):
 
 def test_shell_list(sandbox_env):
     sandbox_env._shells.list_shells.return_value = [
-        {"shell_id": "sh_abc", "target": "dev", "status": "idle"}
+        {"shell_id": "sh_abc", "machine": "dev", "status": "idle"}
     ]
     result = sandbox_env.dispatch("shell_list", {})
     assert len(result) == 1
@@ -116,7 +131,7 @@ def test_shell_list(sandbox_env):
 
 def test_docker_run(sandbox_env):
     info = MagicMock(name="dev", backend="docker", status="running", purpose="test")
-    sandbox_env._targets.register.return_value = info
+    sandbox_env._machines.register.return_value = info
     result = sandbox_env.dispatch("docker_run", {
         "name": "dev", "image": "python:3.12", "purpose": "test"
     })

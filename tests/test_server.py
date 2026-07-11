@@ -41,5 +41,5 @@ def test_sandbox_env_help(server):
 def test_sandbox_env_status_empty(server):
     result = server.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["default_target"] is None
-    assert data["targets"] == []
+    assert data["default_machine"] is None
+    assert data["machines"] == []

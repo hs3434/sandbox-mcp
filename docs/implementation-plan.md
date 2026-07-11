@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an MCP server with 7 exposed tools (6 core + 1 sandbox_env entry) that manages Docker containers and SSH machines as persistent execution targets, with shell-based command execution and full file operation capabilities.
+**Goal:** Build an MCP server with 7 exposed tools (6 core + 1 sandbox_env entry) that manages Docker containers and SSH machines as persistent execution machines, with shell-based command execution and full file operation capabilities.
 
 **Architecture:** Stateful MCP server (stdio JSON-RPC). Three-layer tool exposure: core tools always in tools/list (~875 tokens), sandbox_env for progressive discovery of 18 management actions. ShellSession uses dual-marker mechanism with background drain thread.
 
@@ -21,7 +21,7 @@ sandbox-mcp/
 │   └── sandbox_mcp/
 │       ├── __init__.py
 │       ├── server.py                   # MCP server entry + 7 tool definitions + dispatch
-│       ├── target_registry.py          # Target management (name -> backend)
+│       ├── machine_registry.py          # machine management (name -> backend)
 │       ├── shell_registry.py           # Shell session management (shell_id -> ShellSession)
 │       ├── shell_session.py            # ShellSession: drain thread, dual markers, state machine
 │       ├── sandbox_env.py             # sandbox_env action dispatch + help generation
@@ -99,7 +99,7 @@ markers = ["integration: requires Docker daemon to run"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+machine-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]
@@ -359,7 +359,7 @@ class ShellSession:
             bufsize=0,
         )
         self._state = "idle"
-        self._drain_thread = threading.Thread(target=self._drain, daemon=True)
+        self._drain_thread = threading.Thread(machine=self._drain, daemon=True)
         self._drain_thread.start()
 
     def _drain(self) -> None:
@@ -650,7 +650,7 @@ pytest tests/test_backends_base.py -v
 
 ```python
 # backends/base.py
-"""Abstract backend interface for sandbox execution targets."""
+"""Abstract backend interface for sandbox execution machines."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -673,32 +673,32 @@ class Backend(ABC):
 
     @abstractmethod
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
-        """Create and start a new target."""
+        """Create and start a new machine."""
         ...
 
     @abstractmethod
     def stop(self, name: str) -> TargetInfo:
-        """Stop a running target (state preserved)."""
+        """Stop a running machine (state preserved)."""
         ...
 
     @abstractmethod
     def start(self, name: str) -> TargetInfo:
-        """Start a stopped target."""
+        """Start a stopped machine."""
         ...
 
     @abstractmethod
     def remove(self, name: str) -> dict:
-        """Remove a target entirely."""
+        """Remove a machine entirely."""
         ...
 
     @abstractmethod
     def get_info(self, name: str) -> TargetInfo:
-        """Get current status of a target."""
+        """Get current status of a machine."""
         ...
 
     @abstractmethod
     def open_shell(self, name: str) -> ShellSession:
-        """Open a new persistent shell on the target."""
+        """Open a new persistent shell on the machine."""
         ...
 
     @abstractmethod
@@ -901,7 +901,7 @@ class DockerBackend(Backend):
     def remove(self, name: str) -> dict:
         subprocess.run([self._docker, "rm", "-f", self._container_name(name)],
                        capture_output=True, timeout=30)
-        return {"target": name, "status": "removed"}
+        return {"machine": name, "status": "removed"}
 
     def get_info(self, name: str) -> TargetInfo:
         result = subprocess.run(
@@ -1076,18 +1076,18 @@ class SSHBackend(Backend):
         return f"/tmp/sandbox-mcp-ssh-{name}"
 
     def _ssh_base_args(self, name: str) -> list[str]:
-        target = self._targets.get(name, {})
+        machine = self._targets.get(name, {})
         socket = self._socket_path(name)
         args = [self._ssh, "-o", f"ControlPath={socket}",
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=10"]
-        port = target.get("port", 22)
+        port = machine.get("port", 22)
         args.extend(["-p", str(port)])
-        key = target.get("key")
+        key = machine.get("key")
         if key:
             args.extend(["-i", key])
-        user = target.get("user", "")
-        host = target.get("host", "")
+        user = machine.get("user", "")
+        host = machine.get("host", "")
         args.append(f"{user}@{host}" if user else host)
         return args
 
@@ -1122,16 +1122,16 @@ class SSHBackend(Backend):
 
     def start(self, name: str) -> TargetInfo:
         """Reconnect SSH ControlMaster."""
-        target = self._targets.get(name, {})
-        return self.create(name, **{k: v for k, v in target.items()
+        machine = self._targets.get(name, {})
+        return self.create(name, **{k: v for k, v in machine.items()
                                      if k in ("host", "user", "port", "key")})
 
     def stop(self, name: str) -> TargetInfo:
         """Close the SSH master connection."""
         socket = self._socket_path(name)
-        target = self._targets.get(name, {})
-        user = target.get("user", "")
-        host = target.get("host", "")
+        machine = self._targets.get(name, {})
+        user = machine.get("user", "")
+        host = machine.get("host", "")
         subprocess.run(
             [self._ssh, "-S", socket, "-O", "exit", f"{user}@{host}"],
             capture_output=True, timeout=10
@@ -1145,16 +1145,16 @@ class SSHBackend(Backend):
             except Exception:
                 pass
             del self._targets[name]
-        return {"target": name, "status": "removed"}
+        return {"machine": name, "status": "removed"}
 
     def get_info(self, name: str) -> TargetInfo:
         if name not in self._targets:
             return TargetInfo(name=name, backend="ssh", status="error")
         socket = self._socket_path(name)
-        target = self._targets[name]
+        machine = self._targets[name]
         result = subprocess.run(
             [self._ssh, "-S", socket, "-O", "check",
-             f"{target['user']}@{target['host']}"],
+             f"{machine['user']}@{machine['host']}"],
             capture_output=True, timeout=5
         )
         status = "running" if result.returncode == 0 else "stopped"
@@ -1192,13 +1192,13 @@ git commit -m "feat: SSHBackend with ControlMaster multiplexing"
 
 ---
 
-## Task 6: Target Registry
+## Task 6: machine Registry
 
 **Files:**
-- Create: `target_registry.py`
+- Create: `machine_registry.py`
 - Test: `tests/test_target_registry.py`
 
-Manages name -> backend mapping, target metadata, default target, and explicit target overrides.
+Manages name -> backend mapping, machine metadata, default machine, and explicit machine overrides.
 
 - [ ] **Step 1: Write failing test**
 
@@ -1206,7 +1206,7 @@ Manages name -> backend mapping, target metadata, default target, and explicit t
 # tests/test_target_registry.py
 import pytest
 from unittest.mock import MagicMock
-from sandbox_mcp.target_registry import TargetRegistry
+from sandbox_mcp.machine_registry import TargetRegistry
 
 
 def test_register_target():
@@ -1256,7 +1256,7 @@ def test_resolve_target_default():
 
 def test_resolve_target_no_default():
     reg = TargetRegistry()
-    with pytest.raises(ValueError, match="No default target"):
+    with pytest.raises(ValueError, match="No default machine"):
         reg.resolve_target(None)
 
 
@@ -1281,7 +1281,7 @@ pytest tests/test_target_registry.py -v
 
 - [ ] **Step 3: Implement TargetRegistry**
 
-Implement TargetRegistry with name -> {backend, info, created_at} storage and a default target used by `resolve_target(None)`.
+Implement TargetRegistry with name -> {backend, info, created_at} storage and a default machine used by `resolve_target(None)`.
 
 - [ ] **Step 4: Run tests**
 
@@ -1293,7 +1293,7 @@ Expected: 6 passed
 - [ ] **Step 5: Commit**
 
 ```bash
-git add target_registry.py tests/test_target_registry.py
+git add machine_registry.py tests/test_target_registry.py
 git commit -m "feat: TargetRegistry with default targeting model"
 ```
 
@@ -1305,7 +1305,7 @@ git commit -m "feat: TargetRegistry with default targeting model"
 - Create: `shell_registry.py`
 - Test: `tests/test_shell_registry.py`
 
-Tracks shell sessions, per-target default shells, terminated state handling, and cleanup hints in list output.
+Tracks shell sessions, per-machine default shells, terminated state handling, and cleanup hints in list output.
 
 - [ ] **Step 1: Write failing test**
 
@@ -1351,7 +1351,7 @@ def test_list_shells_by_target():
     reg.open("dev", mock1)
     reg.open("dev", mock2, purpose="tests")
     reg.open("db", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
-    dev_shells = reg.list_shells(target="dev")
+    dev_shells = reg.list_shells(machine="dev")
     assert len(dev_shells) == 2
 
 
@@ -1379,11 +1379,11 @@ def test_set_default_shell():
     reg = ShellRegistry()
     shell1 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
     shell2 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
-    target = reg.set_default(shell2)
-    assert target == "dev"
+    machine = reg.set_default(shell2)
+    assert machine == "dev"
     assert reg.get_target(shell2) == "dev"
     assert reg.get_default_id("dev") == shell2
-    shells = reg.list_shells(target="dev")
+    shells = reg.list_shells(machine="dev")
     assert next(s for s in shells if s["shell_id"] == shell1)["is_default"] is False
     assert next(s for s in shells if s["shell_id"] == shell2)["is_default"] is True
 
@@ -1396,7 +1396,7 @@ def test_close_all_for_target():
     reg.open("dev", mock2)
     reg.open("db", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))
     reg.close_all_for_target("dev")
-    assert len(reg.list_shells(target="dev")) == 0
+    assert len(reg.list_shells(machine="dev")) == 0
     assert len(reg.list_shells()) == 1
 ```
 
@@ -1410,7 +1410,7 @@ pytest tests/test_shell_registry.py -v
 
 ```python
 # shell_registry.py
-"""Shell Registry: tracks all open shell sessions across targets."""
+"""Shell Registry: tracks all open shell sessions across machines."""
 
 import uuid
 from typing import Optional, Callable
@@ -1424,12 +1424,12 @@ class ShellRegistry:
         self._shells: dict[str, dict] = {}
         self._default_shells: dict[str, str] = {}
 
-    def open(self, target: str, session: ShellSession, purpose: str = "") -> str:
+    def open(self, machine: str, session: ShellSession, purpose: str = "") -> str:
         shell_id = f"sh_{uuid.uuid4().hex[:12]}"
         session.purpose = purpose
         self._shells[shell_id] = {
             "session": session,
-            "target": target,
+            "machine": machine,
             "purpose": purpose,
         }
         return shell_id
@@ -1442,61 +1442,61 @@ class ShellRegistry:
         entry = self._shells.pop(shell_id, None)
         if entry:
             entry["session"].close()
-            target = entry["target"]
-            if self._default_shells.get(target) == shell_id:
-                del self._default_shells[target]
+            machine = entry["machine"]
+            if self._default_shells.get(machine) == shell_id:
+                del self._default_shells[machine]
             return True
         return False
 
-    def get_or_create_default(self, target: str,
+    def get_or_create_default(self, machine: str,
                               factory: Callable[[], ShellSession]) -> str:
-        if target in self._default_shells:
-            shell_id = self._default_shells[target]
+        if machine in self._default_shells:
+            shell_id = self._default_shells[machine]
             if shell_id in self._shells:
                 return shell_id
         session = factory()
-        shell_id = self.open(target, session, purpose="default")
-        self._default_shells[target] = shell_id
+        shell_id = self.open(machine, session, purpose="default")
+        self._default_shells[machine] = shell_id
         return shell_id
 
     def get_target(self, shell_id: str) -> Optional[str]:
         entry = self._shells.get(shell_id)
-        return entry["target"] if entry else None
+        return entry["machine"] if entry else None
 
     def set_default(self, shell_id: str) -> str:
         entry = self._shells.get(shell_id)
         if entry is None:
             raise ValueError(f"Unknown shell_id: {shell_id}")
-        target = entry["target"]
-        self._default_shells[target] = shell_id
-        return target
+        machine = entry["machine"]
+        self._default_shells[machine] = shell_id
+        return machine
 
-    def get_default_id(self, target: str) -> Optional[str]:
-        return self._default_shells.get(target)
+    def get_default_id(self, machine: str) -> Optional[str]:
+        return self._default_shells.get(machine)
 
-    def list_shells(self, target: Optional[str] = None) -> list[dict]:
+    def list_shells(self, machine: Optional[str] = None) -> list[dict]:
         result = []
         for shell_id, entry in self._shells.items():
-            if target and entry["target"] != target:
+            if machine and entry["machine"] != machine:
                 continue
             session = entry["session"]
             item = {
                 "shell_id": shell_id,
-                "target": entry["target"],
+                "machine": entry["machine"],
                 "purpose": entry.get("purpose", ""),
                 "status": session.state,
                 "uptime": f"{int(session.uptime)}s",
                 "last_command": session.last_command,
-                "is_default": self._default_shells.get(entry["target"]) == shell_id,
+                "is_default": self._default_shells.get(entry["machine"]) == shell_id,
             }
             if session.state == "terminated":
                 item["hint"] = "Process exited. Call shell_remove to clean up."
             result.append(item)
         return result
 
-    def close_all_for_target(self, target: str) -> int:
+    def close_all_for_target(self, machine: str) -> int:
         count = 0
-        to_close = [sid for sid, e in self._shells.items() if e["target"] == target]
+        to_close = [sid for sid, e in self._shells.items() if e["machine"] == machine]
         for sid in to_close:
             self.close(sid)
             count += 1
@@ -1525,7 +1525,7 @@ git commit -m "feat: ShellRegistry with terminated hints and default shell track
 - Create: `file_operations.py`
 - Test: `tests/test_file_operations.py`
 
-File operations execute shell commands on targets via backend.
+File operations execute shell commands on machines via backend.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1551,7 +1551,7 @@ def test_read_returns_line_numbered_output(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "line1\nline2\nline3\n",
     }
-    result = fops.read("/tmp/x.txt", target="dev")
+    result = fops.read("/tmp/x.txt", machine="dev")
     assert result["status"] == "ok"
     assert result["path"] == "/tmp/x.txt"
     assert "1|line1" in result["output"]
@@ -1562,7 +1562,7 @@ def test_read_pagination_offset_and_limit(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "line2\nline3\n",
     }
-    result = fops.read("/tmp/x.txt", target="dev", offset=2, limit=2)
+    result = fops.read("/tmp/x.txt", machine="dev", offset=2, limit=2)
     assert result["offset"] == 2
     assert result["limit"] == 2
     assert "1|line2" in result["output"]  # renumbered from offset
@@ -1575,7 +1575,7 @@ def test_read_not_found_returns_suggestions(fops, backend):
         "exit_code": 1, "output": "",
     }
     backend.suggest_paths.return_value = ["/tmp/x.txt", "/tmp/x.txt.bak"]
-    result = fops.read("/tmp/missing.txt", target="dev")
+    result = fops.read("/tmp/missing.txt", machine="dev")
     assert result["status"] == "not_found"
     assert result["suggestions"] == ["/tmp/x.txt", "/tmp/x.txt.bak"]
 
@@ -1584,14 +1584,14 @@ def test_read_binary_returns_error(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "binary\x00data",
     }
-    result = fops.read("/tmp/blob.bin", target="dev")
+    result = fops.read("/tmp/blob.bin", machine="dev")
     assert result["status"] == "binary"
     assert "error" in result
 
 
 def test_write_creates_parent_dirs_and_writes(fops, backend):
     backend.exec_oneoff.return_value = {"exit_code": 0, "output": ""}
-    result = fops.write("/tmp/new/dir/x.txt", "hello", target="dev")
+    result = fops.write("/tmp/new/dir/x.txt", "hello", machine="dev")
     assert result["status"] == "ok"
     cmd = backend.exec_oneoff.call_args[0][1]
     assert "mkdir -p" in cmd
@@ -1600,7 +1600,7 @@ def test_write_creates_parent_dirs_and_writes(fops, backend):
 
 def test_write_runs_syntax_check_when_extension_known(fops, backend):
     backend.exec_oneoff.return_value = {"exit_code": 0, "output": ""}
-    fops.write("/tmp/x.py", "print(1)\n", target="dev")
+    fops.write("/tmp/x.py", "print(1)\n", machine="dev")
     calls = [c.args[1] for c in backend.exec_oneoff.call_args_list]
     assert any("python -m py_compile" in cmd for cmd in calls)
 ```
@@ -1631,13 +1631,13 @@ class FileOperations:
     def __init__(self, backend):
         self._backend = backend
 
-    def read(self, path: str, target: str, offset: int = 1,
+    def read(self, path: str, machine: str, offset: int = 1,
              limit: int = 500) -> dict:
         sed_range = f"{offset},{offset + limit - 1}p"
         cmd = f"sed -n {shlex.quote(sed_range)} {shlex.quote(path)}"
-        result = self._backend.exec_oneoff(target, cmd)
+        result = self._backend.exec_oneoff(machine, cmd)
         if result.get("exit_code") not in (0, None):
-            suggestions = self._backend.suggest_paths(target, path)
+            suggestions = self._backend.suggest_paths(machine, path)
             return {"status": "not_found", "path": path,
                     "suggestions": suggestions}
         output = result.get("output", "")
@@ -1650,14 +1650,14 @@ class FileOperations:
                 "offset": offset, "limit": limit,
                 "output": "\n".join(numbered) + ("\n" if numbered else "")}
 
-    def write(self, path: str, content: str, target: str) -> dict:
-        self._backend.exec_oneoff(target, f"mkdir -p $(dirname {shlex.quote(path)})")
+    def write(self, path: str, content: str, machine: str) -> dict:
+        self._backend.exec_oneoff(machine, f"mkdir -p $(dirname {shlex.quote(path)})")
         cmd = (f"cat > {shlex.quote(path)} <<'__SANDBOX_EOF__'\n"
                f"{content}\n__SANDBOX_EOF__")
-        self._backend.exec_oneoff(target, cmd)
+        self._backend.exec_oneoff(machine, cmd)
         check = self._syntax_check(path, content)
         if check is not None:
-            self._backend.exec_oneoff(target, check)
+            self._backend.exec_oneoff(machine, check)
         return {"status": "ok", "path": path}
 
     def _syntax_check(self, path: str, content: str) -> Optional[str]:
@@ -1704,7 +1704,7 @@ def test_patch_replace_mode_replaces_unique_string(fops, backend):
         {"exit_code": 0, "output": "alpha\nbeta\ngamma\n"},  # cat
         {"exit_code": 0, "output": ""},                      # write back
     ]
-    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="beta", new_string="BETA")
     assert result["status"] == "ok"
     assert result["matches"] == 1
@@ -1715,7 +1715,7 @@ def test_patch_replace_mode_returns_diff(fops, backend):
         {"exit_code": 0, "output": "a\nb\nc\n"},
         {"exit_code": 0, "output": ""},
     ]
-    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="b", new_string="B")
     assert "diff" in result
     assert "-b" in result["diff"]
@@ -1726,7 +1726,7 @@ def test_patch_replace_mode_rejects_multiple_matches(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "x\nx\nx\n",
     }
-    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="x", new_string="y")
     assert result["status"] == "error"
     assert "Multiple matches" in result["error"]
@@ -1737,7 +1737,7 @@ def test_patch_replace_mode_fuzzy_match(fops, backend):
         {"exit_code": 0, "output": "hello world\n"},
         {"exit_code": 0, "output": ""},
     ]
-    result = fops.patch(mode="replace", target="dev", path="/tmp/x.txt",
+    result = fops.patch(mode="replace", machine="dev", path="/tmp/x.txt",
                        old_string="helo world", new_string="hello world",
                        replace_all=False)
     assert result["status"] == "ok"
@@ -1749,7 +1749,7 @@ def test_search_content_returns_matching_lines(fops, backend):
         "exit_code": 0,
         "output": "/tmp/x.txt:3:foo bar\n/tmp/y.txt:7:baz foo\n",
     }
-    result = fops.search("foo", target="dev", search_type="content")
+    result = fops.search("foo", machine="dev", search_type="content")
     assert result["status"] == "ok"
     assert len(result["results"]) == 2
     assert result["results"][0]["line"] == 3
@@ -1760,7 +1760,7 @@ def test_search_files_mode_uses_glob(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "/tmp/a.py\n/tmp/b.py\n",
     }
-    result = fops.search("*.py", target="dev", search_type="files")
+    result = fops.search("*.py", machine="dev", search_type="files")
     assert result["status"] == "ok"
     assert result["results"] == ["/tmp/a.py", "/tmp/b.py"]
 
@@ -1769,7 +1769,7 @@ def test_search_limit_truncates_results(fops, backend):
     backend.exec_oneoff.return_value = {
         "exit_code": 0, "output": "\n".join(f"/tmp/f{i}.py" for i in range(10)) + "\n",
     }
-    result = fops.search("*.py", target="dev", search_type="files", limit=3)
+    result = fops.search("*.py", machine="dev", search_type="files", limit=3)
     assert len(result["results"]) == 3
 ```
 
@@ -1791,20 +1791,20 @@ import difflib
 class FileOperations:
     # ... read, write, _syntax_check unchanged ...
 
-    def patch(self, mode: str, target: str, path: str = "",
+    def patch(self, mode: str, machine: str, path: str = "",
               old_string: str = "", new_string: str = "",
               replace_all: bool = False, patch: str = "") -> dict:
         if mode == "replace":
-            return self._patch_replace(target, path, old_string, new_string, replace_all)
+            return self._patch_replace(machine, path, old_string, new_string, replace_all)
         if mode == "patch":
-            return self._patch_apply(target, patch)
+            return self._patch_apply(machine, patch)
         return {"status": "error", "error": f"Unknown patch mode: {mode}"}
 
-    def _patch_replace(self, target: str, path: str,
+    def _patch_replace(self, machine: str, path: str,
                        old_string: str, new_string: str,
                        replace_all: bool) -> dict:
         cmd = f"cat {shlex.quote(path)}"
-        result = self._backend.exec_oneoff(target, cmd)
+        result = self._backend.exec_oneoff(machine, cmd)
         if result.get("exit_code") not in (0, None):
             return {"status": "not_found", "path": path}
         original = result.get("output", "")
@@ -1829,16 +1829,16 @@ class FileOperations:
             original.splitlines(), replaced.splitlines(),
             fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""
         ))
-        self._backend.exec_oneoff(target, f"cat > {shlex.quote(path)} <<'__SANDBOX_EOF__'\n{replaced}\n__SANDBOX_EOF__")
+        self._backend.exec_oneoff(machine, f"cat > {shlex.quote(path)} <<'__SANDBOX_EOF__'\n{replaced}\n__SANDBOX_EOF__")
         return {"status": "ok", "path": path, "matches": count,
                 "fuzzy": fuzzy, "diff": diff}
 
-    def _patch_apply(self, target: str, patch_text: str) -> dict:
-        self._backend.exec_oneoff(target,
+    def _patch_apply(self, machine: str, patch_text: str) -> dict:
+        self._backend.exec_oneoff(machine,
                                   f"patch -p0 <<'__SANDBOX_EOF__'\n{patch_text}\n__SANDBOX_EOF__")
         return {"status": "ok"}
 
-    def search(self, pattern: str, target: str,
+    def search(self, pattern: str, machine: str,
                search_type: str = "content", path: str = ".",
                file_glob: str = "", limit: int = 50,
                offset: int = 0, output_mode: str = "content",
@@ -1858,7 +1858,7 @@ class FileOperations:
         else:
             return {"status": "error",
                     "error": f"Unknown search_type: {search_type}"}
-        result = self._backend.exec_oneoff(target, cmd)
+        result = self._backend.exec_oneoff(machine, cmd)
         raw = result.get("output", "")
         if search_type == "files":
             results = [r for r in raw.splitlines() if r][offset:offset + limit]
@@ -1899,7 +1899,7 @@ git commit -m "feat: FileOperations patch (fuzzy match) + search (ripgrep)"
 
 sandbox_env implements 18 actions with progressive discovery:
 - `help`: returns common ops (default_set/shell_new/shell_list/shell_remove) + pointers to docker_help/ssh_help
-- `status`: returns default target, targets, shells
+- `status`: returns default machine, machines, shells
 - `docker_help`: returns Docker ops (docker_run/build/commit/stop/start/remove)
 - `ssh_help`: returns SSH ops (ssh_connect/disconnect/reconnect/remove)
 - Plus all discovered execution actions (default_set, shell_new, docker_run, ssh_connect, etc.)
@@ -1916,11 +1916,11 @@ from sandbox_mcp.sandbox_env import SandboxEnv
 
 @pytest.fixture
 def sandbox_env():
-    targets = MagicMock()
+    machines = MagicMock()
     shells = MagicMock()
     docker_backend = MagicMock()
     ssh_backend = MagicMock()
-    return SandboxEnv(targets, shells, docker_backend, ssh_backend)
+    return SandboxEnv(machines, shells, docker_backend, ssh_backend)
 
 
 def test_help_returns_operations_and_pointers(sandbox_env):
@@ -1961,9 +1961,9 @@ def test_ssh_help_returns_ssh_ops(sandbox_env):
 
 def test_default_set_sets_default_target(sandbox_env):
     sandbox_env._targets.resolve_target.return_value = "dev"
-    result = sandbox_env.dispatch("default_set", {"target": "dev"})
+    result = sandbox_env.dispatch("default_set", {"machine": "dev"})
     sandbox_env._targets.set_default.assert_called_once_with("dev")
-    assert result == {"default_target": "dev"}
+    assert result == {"default_machine": "dev"}
 
 
 def test_default_set_sets_default_shell(sandbox_env):
@@ -1971,11 +1971,11 @@ def test_default_set_sets_default_shell(sandbox_env):
     result = sandbox_env.dispatch("default_set", {"shell_id": "sh_abc"})
     sandbox_env._shells.get_target.assert_called_once_with("sh_abc")
     sandbox_env._shells.set_default.assert_called_once_with("sh_abc")
-    assert result == {"default_shell": {"target": "dev", "shell_id": "sh_abc"}}
+    assert result == {"default_shell": {"machine": "dev", "shell_id": "sh_abc"}}
 
 
 def test_default_set_rejects_both_target_and_shell(sandbox_env):
-    result = sandbox_env.dispatch("default_set", {"target": "dev", "shell_id": "sh_abc"})
+    result = sandbox_env.dispatch("default_set", {"machine": "dev", "shell_id": "sh_abc"})
     assert "error" in result
 
 
@@ -1987,8 +1987,8 @@ def test_status_returns_state(sandbox_env):
     sandbox_env._targets.get_info.return_value = info
     sandbox_env._shells.list_shells.return_value = []
     result = sandbox_env.dispatch("status", {})
-    assert result["default_target"] == "dev"
-    assert len(result["targets"]) == 1
+    assert result["default_machine"] == "dev"
+    assert len(result["machines"]) == 1
     assert "shells" in result
 
 
@@ -1999,10 +1999,10 @@ def test_shell_new(sandbox_env):
     sandbox_env._targets.resolve_target.return_value = "dev"
     sandbox_env._targets.get_backend.return_value = backend
     sandbox_env._shells.open.return_value = "sh_abc"
-    result = sandbox_env.dispatch("shell_new", {"target": "dev", "purpose": "server"})
+    result = sandbox_env.dispatch("shell_new", {"machine": "dev", "purpose": "server"})
     backend.open_shell.assert_called_once_with("dev")
     sandbox_env._shells.open.assert_called_once_with("dev", shell, purpose="server")
-    assert result == {"shell_id": "sh_abc", "target": "dev"}
+    assert result == {"shell_id": "sh_abc", "machine": "dev"}
 
 
 def test_shell_remove(sandbox_env):
@@ -2013,7 +2013,7 @@ def test_shell_remove(sandbox_env):
 
 def test_shell_list(sandbox_env):
     sandbox_env._shells.list_shells.return_value = [
-        {"shell_id": "sh_abc", "target": "dev", "status": "idle"}
+        {"shell_id": "sh_abc", "machine": "dev", "status": "idle"}
     ]
     result = sandbox_env.dispatch("shell_list", {})
     assert len(result) == 1
@@ -2073,21 +2073,21 @@ HELP_RESPONSE = {
         },
         {
             "action": "status",
-            "description": "Show current state: default target, target list, shell list.",
+            "description": "Show current state: default machine, machine list, shell list.",
         },
     ],
     "operations": [
         {
             "action": "default_set",
-            "description": "Set default target or default shell. Pass target to set the default target. Pass shell_id to set that shell as its target's default shell.",
-            "optional": {"target": "string", "shell_id": "string"},
-            "requires": "Exactly one of target or shell_id",
-            "example": {"target": "dev"},
+            "description": "Set default machine or default shell. Pass machine to set the default machine. Pass shell_id to set that shell as its machine's default shell.",
+            "optional": {"machine": "string", "shell_id": "string"},
+            "requires": "Exactly one of machine or shell_id",
+            "example": {"machine": "dev"},
         },
         {
             "action": "shell_new",
-            "description": "Create an additional shell session on a target.",
-            "optional": {"target": "string", "purpose": "string"},
+            "description": "Create an additional shell session on a machine.",
+            "optional": {"machine": "string", "purpose": "string"},
         },
         {
             "action": "shell_remove",
@@ -2096,15 +2096,15 @@ HELP_RESPONSE = {
         },
         {
             "action": "shell_list",
-            "description": "List all shells, optionally filtered by target.",
-            "optional": {"target": "string"},
+            "description": "List all shells, optionally filtered by machine.",
+            "optional": {"machine": "string"},
         },
     ],
     "more_help": {
         "docker_help": "Docker: create/build/commit/stop/start/remove containers",
-        "ssh_help": "SSH: connect/disconnect/reconnect/remove remote targets",
+        "ssh_help": "SSH: connect/disconnect/reconnect/remove remote machines",
     },
-    "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. Target-aware tools support optional target.",
+    "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. machine-aware tools support optional machine.",
 }
 
 DOCKER_HELP_RESPONSE = {
@@ -2132,27 +2132,27 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_commit",
             "description": "Save container state as a new image.",
-            "required": {"target": "string"},
+            "required": {"machine": "string"},
             "optional": {"image_tag": "string - auto-generated if omitted"},
             "returns": {"image_tag": "string", "status": "committed"},
         },
         {
             "action": "docker_stop",
             "description": "Stop container. State preserved, can docker_start to resume.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "stopped"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "stopped"},
         },
         {
             "action": "docker_start",
             "description": "Start a stopped container.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "running"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "running"},
         },
         {
             "action": "docker_remove",
-            "description": "Stop and remove container. Closes all shells for the target.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "removed"},
+            "description": "Stop and remove container. Closes all shells for the machine.",
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "removed"},
         },
     ]
 }
@@ -2173,20 +2173,20 @@ SSH_HELP_RESPONSE = {
         {
             "action": "ssh_disconnect",
             "description": "Close SSH connection. Remote machine is not affected.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "stopped"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "stopped"},
         },
         {
             "action": "ssh_reconnect",
             "description": "Re-establish SSH connection. Shells are lost on disconnect.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "running"},
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "running"},
         },
         {
             "action": "ssh_remove",
-            "description": "Unregister SSH target. Remote machine is not affected.",
-            "required": {"target": "string"},
-            "returns": {"target": "string", "status": "removed"},
+            "description": "Unregister SSH machine. Remote machine is not affected.",
+            "required": {"machine": "string"},
+            "returns": {"machine": "string", "status": "removed"},
         },
     ]
 }
@@ -2195,8 +2195,8 @@ SSH_HELP_RESPONSE = {
 class SandboxEnv:
     """Dispatches sandbox_env actions and generates help responses."""
 
-    def __init__(self, targets, shells, docker_backend, ssh_backend):
-        self._targets = targets
+    def __init__(self, machines, shells, docker_backend, ssh_backend):
+        self._targets = machines
         self._shells = shells
         self._docker = docker_backend
         self._ssh = ssh_backend
@@ -2223,14 +2223,14 @@ class SandboxEnv:
 
     def _op_status(self, params):
         default = self._targets.get_default()
-        targets = []
+        machines = []
         for name in self._targets.list_targets():
             info = self._targets.get_info(name)
-            shell_count = len(self._shells.list_shells(target=name))
+            shell_count = len(self._shells.list_shells(machine=name))
             created_at = self._targets._targets.get(name, {}).get("created_at", time.time())
             uptime_s = int(time.time() - created_at)
             uptime = f"{uptime_s // 3600}h{(uptime_s % 3600) // 60}m" if uptime_s > 60 else f"{uptime_s}s"
-            targets.append({
+            machines.append({
                 "name": name,
                 "backend": info.backend,
                 "status": info.status,
@@ -2239,31 +2239,31 @@ class SandboxEnv:
                 "uptime": uptime,
             })
         shells = self._shells.list_shells()
-        return {"default_target": default, "targets": targets, "shells": shells}
+        return {"default_machine": default, "machines": machines, "shells": shells}
 
     # --- General actions ---
 
     def _op_default_set(self, params):
-        has_target = "target" in params
+        has_target = "machine" in params
         has_shell = "shell_id" in params
         if has_target == has_shell:
-            return {"error": "Pass exactly one of target or shell_id"}
+            return {"error": "Pass exactly one of machine or shell_id"}
         if has_target:
-            target = self._targets.resolve_target(params["target"])
-            self._targets.set_default(target)
-            return {"default_target": target}
+            machine = self._targets.resolve_target(params["machine"])
+            self._targets.set_default(machine)
+            return {"default_machine": machine}
         shell_target = self._shells.get_target(params["shell_id"])
         if shell_target is None:
             return {"error": f"Unknown shell_id: {params['shell_id']}"}
         self._shells.set_default(params["shell_id"])
-        return {"default_shell": {"target": shell_target, "shell_id": params["shell_id"]}}
+        return {"default_shell": {"machine": shell_target, "shell_id": params["shell_id"]}}
 
     def _op_shell_new(self, params):
-        target = self._targets.resolve_target(params.get("target"))
-        backend = self._targets.get_backend(target)
-        shell = backend.open_shell(target)
-        shell_id = self._shells.open(target, shell, purpose=params.get("purpose", "manual"))
-        return {"shell_id": shell_id, "target": target}
+        machine = self._targets.resolve_target(params.get("machine"))
+        backend = self._targets.get_backend(machine)
+        shell = backend.open_shell(machine)
+        shell_id = self._shells.open(machine, shell, purpose=params.get("purpose", "manual"))
+        return {"shell_id": shell_id, "machine": machine}
 
     def _op_shell_remove(self, params):
         if "shell_id" not in params:
@@ -2273,7 +2273,7 @@ class SandboxEnv:
         return {"error": f"Unknown shell_id: {params['shell_id']}"}
 
     def _op_shell_list(self, params):
-        return self._shells.list_shells(target=params.get("target"))
+        return self._shells.list_shells(machine=params.get("machine"))
 
     # --- Docker actions ---
 
@@ -2306,53 +2306,53 @@ class SandboxEnv:
                                   params.get("context_dir"))
 
     def _op_docker_commit(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
         from sandbox_mcp.backends.docker_backend import DockerBackend
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_commit only supported on Docker targets"}
-        return backend.commit(target, params.get("image_tag"))
+            return {"error": "docker_commit only supported on Docker machines"}
+        return backend.commit(machine, params.get("image_tag"))
 
     def _op_docker_stop(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_stop only supported on Docker targets"}
-        self._shells.close_all_for_target(target)
-        info = backend.stop(target)
-        return {"target": target, "status": info.status}
+            return {"error": "docker_stop only supported on Docker machines"}
+        self._shells.close_all_for_target(machine)
+        info = backend.stop(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_docker_start(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_start only supported on Docker targets"}
-        info = backend.start(target)
-        return {"target": target, "status": info.status}
+            return {"error": "docker_start only supported on Docker machines"}
+        info = backend.start(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_docker_remove(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.docker_backend import DockerBackend
         if not isinstance(backend, DockerBackend):
-            return {"error": "docker_remove only supported on Docker targets"}
-        self._shells.close_all_for_target(target)
-        result = backend.remove(target)
-        self._targets.unregister(target)
+            return {"error": "docker_remove only supported on Docker machines"}
+        self._shells.close_all_for_target(machine)
+        result = backend.remove(machine)
+        self._targets.unregister(machine)
         return result
 
     # --- SSH actions ---
@@ -2372,42 +2372,42 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 
     def _op_ssh_disconnect(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_disconnect only supported on SSH targets"}
-        self._shells.close_all_for_target(target)
-        info = backend.stop(target)
-        return {"target": target, "status": info.status}
+            return {"error": "ssh_disconnect only supported on SSH machines"}
+        self._shells.close_all_for_target(machine)
+        info = backend.stop(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_ssh_reconnect(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_reconnect only supported on SSH targets"}
-        info = backend.start(target)
-        return {"target": target, "status": info.status}
+            return {"error": "ssh_reconnect only supported on SSH machines"}
+        info = backend.start(machine)
+        return {"machine": machine, "status": info.status}
 
     def _op_ssh_remove(self, params):
-        ok, err = self._require(params, "target")
+        ok, err = self._require(params, "machine")
         if err:
             return {"error": err}
-        target = self._targets.resolve_target(params["target"])
-        backend = self._targets.get_backend(target)
+        machine = self._targets.resolve_target(params["machine"])
+        backend = self._targets.get_backend(machine)
         from sandbox_mcp.backends.ssh_backend import SSHBackend
         if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_remove only supported on SSH targets"}
-        self._shells.close_all_for_target(target)
-        result = backend.remove(target)
-        self._targets.unregister(target)
+            return {"error": "ssh_remove only supported on SSH machines"}
+        self._shells.close_all_for_target(machine)
+        result = backend.remove(machine)
+        self._targets.unregister(machine)
         return result
 ```
 
@@ -2481,8 +2481,8 @@ def test_sandbox_env_help(server):
 def test_sandbox_env_status_empty(server):
     result = server.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["default_target"] is None
-    assert data["targets"] == []
+    assert data["default_machine"] is None
+    assert data["machines"] == []
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2501,7 +2501,7 @@ import json
 import logging
 from typing import Any
 
-from sandbox_mcp.target_registry import TargetRegistry
+from sandbox_mcp.machine_registry import TargetRegistry
 from sandbox_mcp.shell_registry import ShellRegistry
 from sandbox_mcp.file_operations import FileOperations
 from sandbox_mcp.sandbox_env import SandboxEnv
@@ -2518,8 +2518,8 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell command to execute"},
-                "shell_id": {"type": "string", "description": "Specific shell (default: target's default shell)"},
-                "target": {"type": "string", "description": "Target name (default: default target)"},
+                "shell_id": {"type": "string", "description": "Specific shell (default: machine's default shell)"},
+                "machine": {"type": "string", "description": "machine name (default: default machine)"},
                 "wait": {"type": "boolean", "description": "Wait for completion (default: true)"},
                 "timeout": {"type": "integer", "description": "Seconds to wait (default: 30)"},
                 "max_output": {"type": "integer", "description": "Max output bytes (default: 50000)"},
@@ -2545,7 +2545,7 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "target": {"type": "string", "description": "Target name (default: default target)"},
+                "machine": {"type": "string", "description": "machine name (default: default machine)"},
                 "offset": {"type": "integer", "description": "Start line (1-indexed, default: 1)"},
                 "limit": {"type": "integer", "description": "Max lines (default: 500, max: 2000)"},
             },
@@ -2560,7 +2560,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "path": {"type": "string"},
                 "content": {"type": "string", "description": "Complete file content"},
-                "target": {"type": "string", "description": "Target name (default: default target)"},
+                "machine": {"type": "string", "description": "machine name (default: default machine)"},
             },
             "required": ["path", "content"],
         },
@@ -2577,7 +2577,7 @@ TOOL_DEFINITIONS = [
                 "new_string": {"type": "string", "description": "Replacement text (replace mode)"},
                 "replace_all": {"type": "boolean", "description": "Replace all (default: false)"},
                 "patch": {"type": "string", "description": "V4A patch content (patch mode)"},
-                "target": {"type": "string", "description": "Target name (default: default target)"},
+                "machine": {"type": "string", "description": "machine name (default: default machine)"},
             },
             "required": ["mode"],
         },
@@ -2590,7 +2590,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "pattern": {"type": "string"},
                 "search_type": {"type": "string", "enum": ["content", "files"], "description": "default: content"},
-                "target": {"type": "string", "description": "Target name (default: default target)"},
+                "machine": {"type": "string", "description": "machine name (default: default machine)"},
                 "path": {"type": "string", "description": "Directory to search (default: cwd)"},
                 "file_glob": {"type": "string", "description": "Filter files (e.g. *.py)"},
                 "limit": {"type": "integer", "description": "Max results (default: 50)"},
@@ -2633,11 +2633,11 @@ class SandboxServer:
     """Core sandbox MCP server logic (transport-agnostic)."""
 
     def __init__(self):
-        self.targets = TargetRegistry()
+        self.machines = TargetRegistry()
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
-        self.sandbox_env = SandboxEnv(self.targets, self.shells,
+        self.sandbox_env = SandboxEnv(self.machines, self.shells,
                                  self._docker_backend, self._ssh_backend)
 
     def list_tools(self) -> list[ToolDef]:
@@ -2655,13 +2655,13 @@ class SandboxServer:
             return [TextContent(json.dumps({"error": str(e)}))]
 
     def _resolve_target(self, arguments: dict) -> str:
-        return self.targets.resolve_target(arguments.get("target"))
+        return self.machines.resolve_target(arguments.get("machine"))
 
     # --- Shell handlers ---
 
     def _handle_sandbox_shell_exec(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        backend = self.targets.get_backend(target)
+        machine = self._resolve_target(args)
+        backend = self.machines.get_backend(machine)
         shell_id = args.get("shell_id")
         timeout = args.get("timeout", 30)
         wait = args.get("wait", True)
@@ -2673,7 +2673,7 @@ class SandboxServer:
                 return {"error": f"Unknown shell_id: {shell_id}"}
         else:
             sid = self.shells.get_or_create_default(
-                target, lambda: backend.open_shell(target)
+                machine, lambda: backend.open_shell(machine)
             )
             session = self.shells.get(sid)
 
@@ -2688,27 +2688,27 @@ class SandboxServer:
 
     # --- File operation handlers ---
 
-    def _get_file_ops(self, target: str) -> FileOperations:
-        backend = self.targets.get_backend(target)
+    def _get_file_ops(self, machine: str) -> FileOperations:
+        backend = self.machines.get_backend(machine)
         return FileOperations(backend)
 
     def _handle_sandbox_file_read(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
-        return fops.read(args["path"], target,
+        machine = self._resolve_target(args)
+        fops = self._get_file_ops(machine)
+        return fops.read(args["path"], machine,
                          offset=args.get("offset", 1),
                          limit=args.get("limit", 500))
 
     def _handle_sandbox_file_write(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
-        return fops.write(args["path"], args["content"], target)
+        machine = self._resolve_target(args)
+        fops = self._get_file_ops(machine)
+        return fops.write(args["path"], args["content"], machine)
 
     def _handle_sandbox_file_patch(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
+        machine = self._resolve_target(args)
+        fops = self._get_file_ops(machine)
         return fops.patch(
-            mode=args["mode"], target=target,
+            mode=args["mode"], machine=machine,
             path=args.get("path", ""),
             old_string=args.get("old_string", ""),
             new_string=args.get("new_string", ""),
@@ -2717,10 +2717,10 @@ class SandboxServer:
         )
 
     def _handle_sandbox_file_search(self, args: dict) -> dict:
-        target = self._resolve_target(args)
-        fops = self._get_file_ops(target)
+        machine = self._resolve_target(args)
+        fops = self._get_file_ops(machine)
         return fops.search(
-            pattern=args["pattern"], target=target,
+            pattern=args["pattern"], machine=machine,
             search_type=args.get("search_type", "content"),
             path=args.get("path", "."),
             file_glob=args.get("file_glob", ""),
@@ -2816,7 +2816,7 @@ def server():
 
 @pytest.fixture
 def docker_target(server):
-    """Create a temporary Docker target via sandbox_env."""
+    """Create a temporary Docker machine via sandbox_env."""
     result = server.call_tool("sandbox_env", {
         "action": "docker_run",
         "params": {"name": "test-integration", "image": "python:3.12-slim", "purpose": "integration test"},
@@ -2825,11 +2825,11 @@ def docker_target(server):
     if "error" in data:
         pytest.skip(f"Cannot create Docker container: {data['error']}")
     server.call_tool("sandbox_env", {
-        "action": "default_set", "params": {"target": "test-integration"},
+        "action": "default_set", "params": {"machine": "test-integration"},
     })
     yield server
     server.call_tool("sandbox_env", {
-        "action": "docker_remove", "params": {"target": "test-integration"},
+        "action": "docker_remove", "params": {"machine": "test-integration"},
     })
 
 
@@ -2873,7 +2873,7 @@ def test_shell_exec_wait_false_then_read(docker_target):
 
     # Read via shell_list to find the shell
     list_result = docker_target.call_tool("sandbox_env", {
-        "action": "shell_list", "params": {"target": "test-integration"},
+        "action": "shell_list", "params": {"machine": "test-integration"},
     })
     shells = json.loads(list_result[0].text)
     shell_id = shells[0]["shell_id"]
@@ -2904,19 +2904,19 @@ def test_file_operations_in_docker(docker_target):
 
 
 def test_sandbox_env_status(docker_target):
-    """sandbox_env status shows the target."""
+    """sandbox_env status shows the machine."""
     result = docker_target.call_tool("sandbox_env", {"action": "status"})
     data = json.loads(result[0].text)
-    assert data["default_target"] == "test-integration"
-    assert len(data["targets"]) == 1
-    assert data["targets"][0]["backend"] == "docker"
+    assert data["default_machine"] == "test-integration"
+    assert len(data["machines"]) == 1
+    assert data["machines"][0]["backend"] == "docker"
 
 
 def test_docker_commit(docker_target):
     """Commit container state to a new image."""
     result = docker_target.call_tool("sandbox_env", {
         "action": "docker_commit",
-        "params": {"target": "test-integration", "image_tag": "sandbox-test-snapshot:latest"},
+        "params": {"machine": "test-integration", "image_tag": "sandbox-test-snapshot:latest"},
     })
     data = json.loads(result[0].text)
     assert data["status"] == "committed"
@@ -2961,7 +2961,7 @@ git commit -m "test: integration tests for Docker backend with shell_exec and sa
 - [x] sandbox_env 18 actions with progressive discovery -- Task 10
 - [x] sandbox_env inputSchema (~100 tokens) -- Task 11
 - [x] Core 6 tools + sandbox_env = 7 tools in tools/list -- Task 11
-- [x] Default targeting model (default_set + optional target) -- Task 6, 10, 11
+- [x] Default targeting model (default_set + optional machine) -- Task 6, 10, 11
 - [x] File operations (read/write/patch/search) -- Task 8, 9
 - [x] Docker backend (run/build/commit/stop/start/remove) -- Task 4
 - [x] SSH backend (connect/disconnect/reconnect/remove) -- Task 5

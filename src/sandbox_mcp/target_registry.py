@@ -1,4 +1,9 @@
-"""Target registry: name -> backend + metadata + default target tracking."""
+"""Machine registry: name -> backend + metadata + default machine tracking.
+
+Public API uses the term "machine" because that's what the agent sees
+in tool parameters and responses. The internal attribute `_machines`
+replaces the earlier `_targets`.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +13,16 @@ from sandbox_mcp.backends.base import Backend, TargetInfo
 
 
 class TargetRegistry:
-    """Tracks named execution targets and the default target."""
+    """Tracks named execution machines and the default machine."""
 
     def __init__(self):
-        self._targets: dict[str, dict] = {}
+        self._machines: dict[str, dict] = {}
         self._default: str | None = None
 
     def register(self, name: str, backend: Backend, purpose: str = "",
                  **kwargs) -> TargetInfo:
         info = backend.create(name, purpose=purpose, **kwargs)
-        self._targets[name] = {
+        self._machines[name] = {
             "backend": backend,
             "info": info,
             "created_at": time.time(),
@@ -29,40 +34,50 @@ class TargetRegistry:
         return info
 
     def unregister(self, name: str) -> bool:
-        if name not in self._targets:
+        if name not in self._machines:
             return False
-        del self._targets[name]
+        del self._machines[name]
         if self._default == name:
-            self._default = next(iter(self._targets), None)
+            self._default = next(iter(self._machines), None)
         return True
 
-    def list_targets(self) -> list[str]:
-        return list(self._targets.keys())
+    def list_machines(self) -> list[str]:
+        return list(self._machines.keys())
+
+    # Backward-compatible alias; the rest of the codebase still calls
+    # `list_targets()` and `resolve_target()` in a few places.
+    list_targets = list_machines
 
     def get_info(self, name: str) -> TargetInfo:
-        return self._targets[name]["info"]
+        return self._machines[name]["info"]
 
     def get_backend(self, name: str) -> Backend:
-        return self._targets[name]["backend"]
+        return self._machines[name]["backend"]
+
+    def get_created_at(self, name: str) -> float:
+        return self._machines[name].get("created_at", time.time())
 
     def set_default(self, name: str) -> None:
-        if name not in self._targets:
-            raise ValueError(f"Unknown target: {name}")
+        if name not in self._machines:
+            raise ValueError(f"Unknown machine: {name}")
         self._default = name
 
     def get_default(self) -> str | None:
         return self._default
 
-    def resolve_target(self, name: str | None) -> str:
-        """Return the resolved target name.
+    def resolve_machine(self, name: str | None) -> str:
+        """Resolve a machine name to its canonical name.
 
-        - If name is None, return the default target.
-        - If name is provided, return it unchanged (assumes it exists).
+        - If name is None, return the default machine.
+        - If name is provided, validate it exists.
         """
         if name is None:
             if self._default is None:
-                raise ValueError("No default target set")
+                raise ValueError("No default machine set")
             return self._default
-        if name not in self._targets:
-            raise ValueError(f"Unknown target: {name}")
+        if name not in self._machines:
+            raise ValueError(f"Unknown machine: {name}")
         return name
+
+    # Backward-compatible alias.
+    resolve_target = resolve_machine

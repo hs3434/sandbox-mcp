@@ -23,13 +23,13 @@ class FileOperations:
 
     # ---- read / write ----
 
-    def read(self, path: str, target: str, offset: int = 1,
+    def read(self, path: str, machine: str, offset: int = 1,
              limit: int = 500) -> dict:
         sed_range = f"{offset},{offset + limit - 1}p"
         cmd = f"sed -n {shlex.quote(sed_range)} {shlex.quote(path)} 2>/dev/null"
-        result = self._backend.exec_oneoff(target, cmd)
+        result = self._backend.exec_oneoff(machine, cmd)
         if result.get("exit_code") not in (0, None):
-            suggestions = self._backend.suggest_paths(target, path)
+            suggestions = self._backend.suggest_paths(machine, path)
             return {"status": "not_found", "path": path,
                     "suggestions": suggestions}
         output = result.get("output", "") or ""
@@ -43,23 +43,23 @@ class FileOperations:
                 "offset": offset, "limit": limit,
                 "output": "\n".join(numbered) + ("\n" if numbered else "")}
 
-    def write(self, path: str, content: str, target: str) -> dict:
+    def write(self, path: str, content: str, machine: str) -> dict:
         # Always encode via base64 to avoid heredoc EOF collisions and shell
         # interpretation of special characters in arbitrary user content.
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         mkdir = f"mkdir -p $(dirname {shlex.quote(path)})"
-        r = self._backend.exec_oneoff(target, mkdir)
+        r = self._backend.exec_oneoff(machine, mkdir)
         if r.get("exit_code") not in (0, None):
             return {"status": "error", "path": path, "stage": "mkdir",
                     "error": r.get("stderr") or "mkdir failed"}
         cmd = (f"echo {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}")
-        r = self._backend.exec_oneoff(target, cmd)
+        r = self._backend.exec_oneoff(machine, cmd)
         if r.get("exit_code") not in (0, None):
             return {"status": "error", "path": path, "stage": "write",
                     "error": r.get("stderr") or "write failed"}
         check = self._syntax_check(path)
         if check is not None:
-            r = self._backend.exec_oneoff(target, check)
+            r = self._backend.exec_oneoff(machine, check)
             if r.get("exit_code") not in (0, None):
                 return {"status": "error", "path": path, "stage": "syntax_check",
                         "error": r.get("stderr") or "syntax check failed"}
@@ -76,20 +76,20 @@ class FileOperations:
 
     # ---- patch ----
 
-    def patch(self, mode: str, target: str, path: str = "",
+    def patch(self, mode: str, machine: str, path: str = "",
               old_string: str = "", new_string: str = "",
               replace_all: bool = False, patch: str = "") -> dict:
         if mode == "replace":
-            return self._patch_replace(target, path, old_string,
+            return self._patch_replace(machine, path, old_string,
                                        new_string, replace_all)
         if mode == "patch":
-            return self._patch_apply(target, patch)
+            return self._patch_apply(machine, patch)
         return {"status": "error", "error": f"Unknown patch mode: {mode}"}
 
-    def _patch_replace(self, target: str, path: str,
+    def _patch_replace(self, machine: str, path: str,
                        old_string: str, new_string: str,
                        replace_all: bool) -> dict:
-        result = self._backend.exec_oneoff(target, f"cat {shlex.quote(path)}")
+        result = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")
         if result.get("exit_code") not in (0, None):
             return {"status": "not_found", "path": path}
         original = result.get("output", "") or ""
@@ -115,17 +115,17 @@ class FileOperations:
             fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""))
         encoded = base64.b64encode(replaced.encode("utf-8")).decode("ascii")
         self._backend.exec_oneoff(
-            target,
+            machine,
             f"echo {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}")
         return {"status": "ok", "path": path, "matches": count,
                 "fuzzy": fuzzy, "diff": diff}
 
-    def _patch_apply(self, target: str, patch_text: str) -> dict:
+    def _patch_apply(self, machine: str, patch_text: str) -> dict:
         if not patch_text.strip():
             return {"status": "error", "error": "patch is empty"}
         encoded = base64.b64encode(patch_text.encode("utf-8")).decode("ascii")
         result = self._backend.exec_oneoff(
-            target, f"echo {shlex.quote(encoded)} | base64 -d | patch -p0")
+            machine, f"echo {shlex.quote(encoded)} | base64 -d | patch -p0")
         if result.get("exit_code") not in (0, None):
             return {"status": "error",
                     "error": result.get("stderr") or "patch failed"}
@@ -133,7 +133,7 @@ class FileOperations:
 
     # ---- search ----
 
-    def search(self, pattern: str, target: str,
+    def search(self, pattern: str, machine: str,
                search_type: str = "content", path: str = ".",
                file_glob: str = "", limit: int = 50,
                offset: int = 0, output_mode: str = "content",
@@ -155,7 +155,7 @@ class FileOperations:
         else:
             return {"status": "error",
                     "error": f"Unknown search_type: {search_type}"}
-        result = self._backend.exec_oneoff(target, cmd)
+        result = self._backend.exec_oneoff(machine, cmd)
         raw = result.get("output", "") or ""
         if search_type == "files":
             results = [r for r in raw.splitlines() if r]

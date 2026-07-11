@@ -64,9 +64,9 @@ Hermes Gateway (host process)
 | `sandbox_file_search` | Ripgrep content search + glob file search | High |
 | `sandbox_env` | Environment management discovery and dispatch | Low |
 
-Target-aware core tools accept an optional `target` parameter (default: default
-target set via `sandbox_env(action="default_set")`). `sandbox_shell_read` uses
-`shell_id` and does not need a target.
+machine-aware core tools accept an optional `machine` parameter (default: default
+machine set via `sandbox_env(action="default_set")`). `sandbox_shell_read` uses
+`shell_id` and does not need a machine.
 
 ### Layer 2: sandbox_env help (on-demand, ~200 tokens)
 
@@ -74,13 +74,13 @@ The `sandbox_env` schema intentionally keeps the default `tools/list` entry
 small. Its description only advertises two actions:
 
 - `help`: discover common management operations
-- `status`: inspect default target, targets, and shells
+- `status`: inspect default machine, machines, and shells
 
 `action` remains a free string, not an enum, so discovered operations can be
 called through the same tool.
 
 `sandbox_env(action="help")` returns:
-- `default_set`: set default target or default shell
+- `default_set`: set default machine or default shell
 - `shell_new`: create an additional shell session
 - `shell_list`: list shell sessions
 - `shell_remove`: terminate/remove a shell session
@@ -131,7 +131,7 @@ Replaces v1's `sandbox_exec` + `shell_write` with a single command execution
 tool.
 
 ```
-sandbox_shell_exec(command, shell_id?, target?, wait=true, timeout=30, max_output=50000)
+sandbox_shell_exec(command, shell_id?, machine?, wait=true, timeout=30, max_output=50000)
 ```
 
 **Dual marker mechanism:**
@@ -307,8 +307,8 @@ explicitly calls `shell_remove`. This prevents losing diagnostic information.
 
 ```json
 [
-  {"shell_id": "sh_abc", "target": "dev", "status": "idle", "is_default": true, "uptime": "5m"},
-  {"shell_id": "sh_def", "target": "dev", "status": "terminated", "is_default": false,
+  {"shell_id": "sh_abc", "machine": "dev", "status": "idle", "is_default": true, "uptime": "5m"},
+  {"shell_id": "sh_def", "machine": "dev", "status": "terminated", "is_default": false,
    "hint": "Process exited. Call shell_remove to clean up."}
 ]
 ```
@@ -351,26 +351,26 @@ progressive discovery model to keep the default tool schema small:
     },
     {
       "action": "status",
-      "description": "Inspect default target, targets, and shell sessions"
+      "description": "Inspect default machine, machines, and shell sessions"
     }
   ],
   "operations": [
     {
       "action": "default_set",
-      "description": "Set default target or default shell. Pass target to set the default target. Pass shell_id to set that shell as its target's default shell.",
-      "optional": {"target": "string", "shell_id": "string"},
-      "requires": "Exactly one of target or shell_id",
-      "example": {"target": "dev", "shell_id": "sh_abc"}
+      "description": "Set default machine or default shell. Pass machine to set the default machine. Pass shell_id to set that shell as its machine's default shell.",
+      "optional": {"machine": "string", "shell_id": "string"},
+      "requires": "Exactly one of machine or shell_id",
+      "example": {"machine": "dev", "shell_id": "sh_abc"}
     },
     {
       "action": "shell_new",
-      "description": "Create an additional shell session on a target.",
-      "optional": {"target": "string", "purpose": "string"}
+      "description": "Create an additional shell session on a machine.",
+      "optional": {"machine": "string", "purpose": "string"}
     },
     {
       "action": "shell_list",
-      "description": "List shell sessions, optionally filtered by target.",
-      "optional": {"target": "string"}
+      "description": "List shell sessions, optionally filtered by machine.",
+      "optional": {"machine": "string"}
     },
     {
       "action": "shell_remove",
@@ -379,10 +379,10 @@ progressive discovery model to keep the default tool schema small:
     }
   ],
   "more_help": {
-    "docker_help": "Discover Docker target actions: run/build/commit/stop/start/remove",
-    "ssh_help": "Discover SSH target actions: connect/disconnect/reconnect/remove"
+    "docker_help": "Discover Docker machine actions: run/build/commit/stop/start/remove",
+    "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove"
   },
-  "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. Target-aware tools support optional target."
+  "note": "Core tools are directly exposed as sandbox_shell_exec, sandbox_shell_read, and sandbox_file_read/write/patch/search. machine-aware tools support optional machine."
 }
 ```
 
@@ -390,14 +390,14 @@ progressive discovery model to keep the default tool schema small:
 
 ```json
 {
-  "default_target": "dev",
-  "targets": [
+  "default_machine": "dev",
+  "machines": [
     {"name": "dev", "backend": "docker", "status": "running",
      "purpose": "Python dev", "shells": 2, "uptime": "2h15m"}
   ],
   "shells": [
-    {"shell_id": "sh_abc", "target": "dev", "status": "idle", "purpose": "default", "is_default": true, "uptime": "5m"},
-    {"shell_id": "sh_def", "target": "dev", "status": "terminated", "is_default": false,
+    {"shell_id": "sh_abc", "machine": "dev", "status": "idle", "purpose": "default", "is_default": true, "uptime": "5m"},
+    {"shell_id": "sh_def", "machine": "dev", "status": "terminated", "is_default": false,
      "hint": "Process exited. Call shell_remove to clean up."}
   ]
 }
@@ -429,19 +429,19 @@ specializes them:
 |---|---|---|---|
 | stop | docker_stop | ssh_disconnect | Container stops vs connection closes |
 | start | docker_start | ssh_reconnect | Container restarts vs connection re-establishes |
-| remove | docker_remove | ssh_remove | Container destroyed vs target unregistered |
+| remove | docker_remove | ssh_remove | Container destroyed vs machine unregistered |
 
 Action name itself indicates the backend and behavior. No dispatch ambiguity.
-Error messages can be specific: "docker_stop only works on Docker targets".
+Error messages can be specific: "docker_stop only works on Docker machines".
 
 ### Agent discovery flow
 
 ```
 1. sandbox_env(action="help")            → default_set + shell actions + docker_help/ssh_help pointers
-2. sandbox_env(action="status")          → current targets and shells
+2. sandbox_env(action="status")          → current machines and shells
 3. sandbox_env(action="docker_help")     → only if Docker needed (~400 tokens)
 4. sandbox_env(action="docker_run", ...)  → create container
-5. sandbox_env(action="default_set", ...) → set default target
+5. sandbox_env(action="default_set", ...) → set default machine
 6. sandbox_shell_exec(command="...")      → work with core tools
    ...
 7. sandbox_env(action="docker_stop", ...) → stop when done
@@ -465,7 +465,7 @@ SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 
 ### Docker Backend
 
-- Container naming: `sandbox-<target_name>` (deterministic, allows reconnection)
+- Container naming: `sandbox-<machine_name>` (deterministic, allows reconnection)
 - Shell process: `docker exec -i <container> bash`
 - Container lifecycle: `docker run -d --name sandbox-<name> --init --restart
   on-failure:3 <image> sleep infinity`
@@ -487,22 +487,22 @@ SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 - No commit/build support (SSH backend only)
 - No password authentication in v1 (key-based auth via `key` parameter)
 
-## Default Targeting Model
+## Default Machine Model
 
-- `sandbox_env(action="default_set", params={target:"dev"})` sets default target
-- `sandbox_env(action="default_set", params={shell_id:"sh_abc"})` sets that shell as the default shell for its target
-- Target-aware core tools (`sandbox_shell_exec`, `sandbox_file_*`) accept optional `target` parameter
-- If no target specified: use default target
-- If explicit target specified: use that target, don't change default target
-- If no target and no default target: error
-- `sandbox_shell_exec` without `shell_id` uses the target's default shell, lazily creating one if needed
+- `sandbox_env(action="default_set", params={machine:"dev"})` sets default machine
+- `sandbox_env(action="default_set", params={shell_id:"sh_abc"})` sets that shell as the default shell for its machine
+- machine-aware core tools (`sandbox_shell_exec`, `sandbox_file_*`) accept optional `machine` parameter
+- If no machine specified: use default machine
+- If explicit machine specified: use that machine, don't change default machine
+- If no machine and no default machine: error
+- `sandbox_shell_exec` without `shell_id` uses the machine's default shell, lazily creating one if needed
 
 ## Project Structure (updated)
 
 ```
 sandbox-mcp/
 ├── server.py              # MCP server entry + tool dispatch
-├── target_registry.py     # Target management (name -> backend)
+├── machine_registry.py     # machine management (name -> backend)
 ├── shell_registry.py      # Shell session management (shell_id -> ShellSession)
 ├── shell_session.py       # ShellSession: drain thread, dual markers, state machine
 ├── sandbox_env.py         # sandbox_env action dispatch + help generation
@@ -530,17 +530,17 @@ sandbox-mcp/
 - Background drain thread with head+tail buffer
 - File operations: read, write, patch, search
 - sandbox_env progressive discovery (tools/list -> help/status -> docker_help/ssh_help)
-- Default targeting model with default target/default shell
+- Default targeting model with default machine/default shell
 - Output truncation (tail, configurable max_output)
 - Manual shell cleanup with shell_list hints
 
 ### Not Included (future versions)
 - PTY mode for interactive CLI tools
 - Docker image listing
-- Target/shell recovery after MCP server restart
+- machine/shell recovery after MCP server restart
 - Docker network management
 - Docker Compose support
-- Resource limits (CPU/memory) per target
+- Resource limits (CPU/memory) per machine
 - Security: dangerous command detection, sudo blocking (see Security section below)
 - Access control / sandboxing of dangerous commands
 
