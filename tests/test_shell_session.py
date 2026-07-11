@@ -98,27 +98,17 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    # Generate ~12KB output via Python (fast, single exec).
-    # Note: f'{x:05d}' uses single quotes, so bash doesn't expand $x.
+    # Generate ~30KB output quickly with yes(1).
     result = session.send(
-        "python3 -c \"import sys; [print(f'{x:05d}') for x in range(1, 2001)]\"",
+        "yes '0123456789' | head -n 3000",
         wait=True,
         timeout=10,
         max_output=5000,
     )
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
-    assert "02000" in result["output"]
-
-
-def test_close_joins_drain_thread():
-    """close() must release the drain thread so it doesn't leak FDs."""
-    session = ShellSession(["bash"])
-    thread = session._drain_thread
-    assert thread is not None
-    assert thread.is_alive()
+    assert result["output"].rstrip().endswith("0123456789")
     session.close()
-    assert not thread.is_alive()
 
 
 def test_drain_exits_on_bash_exit():
@@ -138,3 +128,13 @@ def test_drain_exits_on_bash_exit():
         time.sleep(0.05)
     assert not thread.is_alive(), "drain should exit after bash exits"
     session.close()
+
+
+def test_close_joins_drain_thread():
+    """close() must release the drain thread so it doesn't leak FDs."""
+    session = ShellSession(["bash"])
+    thread = session._drain_thread
+    assert thread is not None
+    assert thread.is_alive()
+    session.close()
+    assert not thread.is_alive()
