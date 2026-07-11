@@ -113,3 +113,21 @@ def test_close_joins_drain_thread():
     assert thread.is_alive()
     session.close()
     assert not thread.is_alive()
+
+
+def test_drain_exits_on_bash_exit():
+    """When bash exits, drain should see EOF and exit on its own.
+
+    With readline-based drain, the only exit signal is EOF on stdout,
+    which fires when bash closes its stdout (after `proc.kill`).
+    """
+    import time
+    session = ShellSession(["bash"])
+    thread = session._drain_thread
+    session.send("exit 0", wait=True, timeout=5)
+    # bash is now dead. Drain should exit on its own within ~1s.
+    deadline = time.time() + 2.0
+    while time.time() < deadline and thread.is_alive():
+        time.sleep(0.05)
+    assert not thread.is_alive(), "drain should exit after bash exits"
+    session.close()
