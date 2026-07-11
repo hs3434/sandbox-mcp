@@ -24,14 +24,8 @@ tools, adding persistent environment management that the built-in tools lack.
 ### Install
 
 ```bash
-# Core (stdio mode, for Hermes subprocess)
 pip install .
-
-# HTTP mode (for independent service)
-pip install ".[http]"
-
-# Dev (includes test/lint tools)
-pip install -e ".[dev]"
+pip install -e ".[dev]"   # + test/lint tools
 
 # Run unit tests
 pytest tests/ --ignore=tests/test_integration_docker.py -v

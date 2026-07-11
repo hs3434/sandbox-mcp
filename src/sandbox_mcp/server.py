@@ -382,18 +382,12 @@ def main_http():
     host = os.environ.get("SANDBOX_MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("SANDBOX_MCP_PORT", "8010"))
 
-    try:
-        import mcp.types as types
-        import uvicorn
-        from mcp.server import Server
-        from mcp.server.sse import SseServerTransport
-        from starlette.applications import Starlette
-        from starlette.routing import Route
-    except ImportError:
-        logging.error(
-            "HTTP mode requires uvicorn and starlette. Run: pip install 'sandbox-mcp[http]'"
-        )
-        return
+    import mcp.types as types
+    import uvicorn
+    from mcp.server import Server
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Route
 
     logging.basicConfig(
         level=logging.INFO,
