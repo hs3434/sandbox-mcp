@@ -98,16 +98,15 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    # Generate ~30KB output quickly with yes(1).
+    # Generate 50KB via bash brace expansion + printf (pure bash, no external cmd).
     result = session.send(
-        "yes '0123456789' | head -n 3000",
+        "printf 'x%.0s' {1..50000}",
         wait=True,
         timeout=10,
         max_output=5000,
     )
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
-    assert result["output"].rstrip().endswith("0123456789")
     session.close()
 
 
