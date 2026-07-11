@@ -98,9 +98,10 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    # Generate ~12KB output fast. Avoid $ in the command (bash would expand it).
+    # Generate ~12KB output via Python (fast, single exec).
+    # Note: f'{x:05d}' uses single quotes, so bash doesn't expand $x.
     result = session.send(
-        'python3 -c "import sys; [print(str(x).zfill(5)) for x in range(1, 2001)]"',
+        "python3 -c \"import sys; [print(f'{x:05d}') for x in range(1, 2001)]\"",
         wait=True,
         timeout=10,
         max_output=5000,
