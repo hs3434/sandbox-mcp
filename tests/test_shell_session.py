@@ -98,10 +98,14 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    result = session.send("seq 1 5000", wait=True, timeout=20, max_output=5000)
+    # Generate ~100KB of output quickly (single write, no seq loop overhead).
+    result = session.send(
+        "python3 -c \"import sys; [print(f'{i:05d}') for i in range(1, 10001)]\"",
+        wait=True, timeout=10, max_output=5000,
+    )
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
-    assert "5000" in result["output"]
+    assert "10000" in result["output"]
     session.close()
 
 
