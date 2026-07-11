@@ -137,10 +137,11 @@ class SSHBackend(Backend):
     def open_shell(self, name):
         return ShellSession([*self._ssh_base_args(name), "bash"])
 
-    def exec_oneoff(self, name, command, timeout=30):
+    def exec_oneoff(self, name, command, timeout=30, stdin_data=None):
         try:
             result = subprocess.run(
                 [*self._ssh_base_args(name), "bash", "-c", command],
+                input=stdin_data,
                 capture_output=True, text=True, timeout=timeout,
             )
             return {"exit_code": result.returncode,

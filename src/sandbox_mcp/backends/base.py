@@ -45,8 +45,14 @@ class Backend(ABC):
         """Open a new persistent shell on the target."""
 
     @abstractmethod
-    def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
-        """Execute a one-off command (no persistent shell)."""
+    def exec_oneoff(self, name: str, command: str, timeout: int = 30,
+                    stdin_data: str | None = None) -> dict:
+        """Execute a one-off command (no persistent shell).
+
+        ``stdin_data`` is piped to the process's stdin instead of
+        embedding in the command string. Used by the file_ops atomic
+        write path to bypass shell ARG_MAX limits.
+        """
 
     def suggest_paths(self, name: str, missing_path: str) -> list:
         """Best-effort fuzzy suggestion for a missing path. Default: empty list."""

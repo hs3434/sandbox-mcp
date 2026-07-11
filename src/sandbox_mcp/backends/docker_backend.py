@@ -140,16 +140,23 @@ class DockerBackend(Backend):
         container = f"sandbox-{name}"
         return ShellSession([self._docker(), "exec", "-i", container, "bash"])
 
-    def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
+    def exec_oneoff(self, name: str, command: str, timeout: int = 30,
+                    stdin_data: str | None = None) -> dict:
         container = f"sandbox-{name}"
-        result = _run(
-            [self._docker(), "exec", container, "bash", "-c", command],
-            timeout=timeout,
-        )
+        try:
+            proc = subprocess.run(
+                [self._docker(), "exec", "-i", container, "bash", "-c", command],
+                input=stdin_data,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return {"exit_code": -1, "output": "", "stderr": "timeout"}
         return {
-            "exit_code": result.returncode,
-            "output": result.stdout or "",
-            "stderr": result.stderr or "",
+            "exit_code": proc.returncode,
+            "output": proc.stdout or "",
+            "stderr": proc.stderr or "",
         }
 
     def suggest_paths(self, name: str, missing_path: str) -> list:

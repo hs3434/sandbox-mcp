@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
+from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
 from sandbox_mcp.file_operations import FileOperations
@@ -184,13 +186,14 @@ class TextContent:
 class SandboxServer:
     """Core sandbox MCP server logic (transport-agnostic)."""
 
-    def __init__(self):
+    def __init__(self, audit: AuditLogger | None = None):
         self.machines = TargetRegistry()
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
         self.sandbox_env = SandboxEnv(self.machines, self.shells,
                                       self._docker_backend, self._ssh_backend)
+        self.audit = audit if audit is not None else DEFAULT_AUDIT_LOGGER
 
     def list_tools(self):
         return [ToolDef(t["name"], t["description"], t["inputSchema"])
@@ -200,11 +203,27 @@ class SandboxServer:
         handler = getattr(self, f"_handle_{name}", None)
         if handler is None:
             return [TextContent(json.dumps({"error": f"Unknown tool: {name}"}))]
+        arguments = arguments or {}
+        start = time.monotonic()
+        status = "ok"
         try:
-            result = handler(arguments or {})
+            result = handler(arguments)
             return [TextContent(json.dumps(result, ensure_ascii=False))]
         except Exception as e:
+            status = "error"
             return [TextContent(json.dumps({"error": str(e)}))]
+        finally:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            machine = arguments.get("machine") if isinstance(arguments, dict) else None
+            details = {k: v for k, v in (arguments or {}).items()
+                       if k != "machine" and k != "action"}
+            self.audit.record(
+                machine=machine,
+                action=name,
+                status=status,
+                duration_ms=duration_ms,
+                **details,
+            )
 
     def _resolve_machine(self, arguments):
         return self.machines.resolve_machine(arguments.get("machine"))
