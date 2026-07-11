@@ -98,16 +98,16 @@ def test_terminated_on_bash_exit():
 
 def test_output_truncation():
     session = ShellSession(["bash"])
-    # Generate ~16KB output fast enough to not time out on slow CI.
+    # Generate ~12KB output fast. Avoid $ in the command (bash would expand it).
     result = session.send(
-        "python3 -c \"import sys; [print(f'{i:05d}') for i in range(1, 2001)]\"",
+        'python3 -c "import sys; [print(str(x).zfill(5)) for x in range(1, 2001)]"',
         wait=True,
         timeout=10,
         max_output=5000,
     )
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
-    assert "02000" in result["output"]  # last line (padded)
+    assert "02000" in result["output"]
 
 
 def test_close_joins_drain_thread():
