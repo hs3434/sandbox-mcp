@@ -33,6 +33,8 @@ import re
 import shlex
 import uuid
 
+from sandbox_mcp.safety import check_path_safety
+
 LINE_FMT = "{n}|{line}"
 _MAX_FILE_SIZE = 50 * 1024          # 50 KB hard cap on read
 _MAX_LINE_LENGTH = 2000            # per-line truncation
@@ -277,6 +279,7 @@ class FileOperations:
     def read(self, path: str, machine: str, offset: int = 1,
              limit: int = 500) -> dict:
         path = _expand_path(path, self._backend)
+        advisory = check_path_safety(path)
         offset = max(1, int(offset))
         limit = max(1, min(int(limit), _MAX_READ_LIMIT))
 
@@ -333,7 +336,7 @@ class FileOperations:
              + ("... [truncated]" if len(line) > _MAX_LINE_LENGTH else ""))
             for i, line in enumerate(lines)
         ]
-        return {
+        result = {
             "status": "ok",
             "path": path,
             "offset": offset,
@@ -343,6 +346,10 @@ class FileOperations:
             "hint": hint,
             "output": "\n".join(numbered) + ("\n" if numbered else ""),
         }
+        if advisory["warning"]:
+            result["warning"] = advisory["warning"]
+            result["safety_category"] = advisory["category"]
+        return result
 
     def _suggest_similar_files(self, path: str, machine: str) -> dict:
         """Return a not_found result with up to 5 similar files."""
@@ -372,6 +379,7 @@ class FileOperations:
 
     def write(self, path: str, content: str, machine: str) -> dict:
         path = _expand_path(path, self._backend)
+        advisory = check_path_safety(path)
         ext = os.path.splitext(path)[1].lower()
 
         # Pre-write fail-closed gate for structured formats. The shim
@@ -443,9 +451,13 @@ class FileOperations:
         except ValueError:
             bytes_written = len(content_to_write.encode("utf-8"))
 
-        return {"status": "ok", "path": path,
-                "bytes_written": bytes_written,
-                "lint": lint_summary}
+        result = {"status": "ok", "path": path,
+                   "bytes_written": bytes_written,
+                   "lint": lint_summary}
+        if advisory["warning"]:
+            result["warning"] = advisory["warning"]
+            result["safety_category"] = advisory["category"]
+        return result
 
     # ---- patch ----
 
@@ -463,6 +475,7 @@ class FileOperations:
                        old_string: str, new_string: str,
                        replace_all: bool) -> dict:
         path = _expand_path(path, self._backend)
+        advisory = check_path_safety(path)
         result = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")
         if result.get("exit_code") not in (0, None):
             return {"status": "not_found", "path": path}
@@ -512,8 +525,12 @@ class FileOperations:
         if _strip_bom(actual)[0] != expected:
             return {"status": "error", "error": "patch did not persist"}
 
-        return {"status": "ok", "path": path, "matches": count,
-                "fuzzy": fuzzy, "diff": diff}
+        result = {"status": "ok", "path": path, "matches": count,
+                   "fuzzy": fuzzy, "diff": diff}
+        if advisory["warning"]:
+            result["warning"] = advisory["warning"]
+            result["safety_category"] = advisory["category"]
+        return result
 
     def _patch_apply(self, machine: str, patch_text: str) -> dict:
         if not patch_text.strip():
