@@ -9,7 +9,6 @@ States: idle | busy | running | terminated
 
 from __future__ import annotations
 
-import os
 import re
 import select
 import subprocess
@@ -65,74 +64,72 @@ class ShellSession:
         self._drain_thread.start()
 
     def _drain(self):
-        """Background thread: read stdout, buffer data, detect markers.
+        """Background thread: read stdout line-by-line, detect markers.
 
-        `os.read()` does not preserve message boundaries; a marker line can
-        straddle two reads. We therefore keep a small `_marker_buf` that
-        is reset on every successful `__END_` detection. The user-visible
-        output buffer (`_head` + `_tail`) is independent of this and
-        populated from the same chunks.
+        bash emits `__START_<uuid>__` and `__END_<uuid>__:$?` on their own
+        lines (terminated by `\\n`), so `readline()` always returns a
+        complete marker. The user-visible output buffer (`_head` + `_tail`)
+        is filled from the same lines.
         """
         proc = self._process
-        marker_buf = bytearray()
+        stdout = proc.stdout  # BufferedReader; readline() returns bytes
+
         while True:
             try:
-                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+                ready, _, _ = select.select([stdout], [], [], 0.1)
             except (ValueError, OSError):
                 break
-            if ready:
-                try:
-                    chunk = os.read(proc.stdout.fileno(), 4096)
-                except (ValueError, OSError):
-                    break
-                if not chunk:
-                    break
+            if not ready:
+                continue
+            try:
+                line = stdout.readline()
+            except (ValueError, OSError):
+                break
+            if not line:
+                # EOF: bash closed its stdout.
+                break
+            self._store_output(line)
 
-                if not self._head_done:
-                    remaining = self.HEAD_SIZE - len(self._head)
-                    if remaining > 0:
-                        take = chunk[:remaining]
-                        self._head.extend(take)
-                        leftover = chunk[remaining:]
-                        if leftover:
-                            self._tail.extend(leftover)
-                            self._head_done = True
-                    else:
-                        self._tail.extend(chunk)
-                        self._head_done = True
-                else:
-                    self._tail.extend(chunk)
+            start_tag = (self._pending_start_marker.encode("utf-8")
+                         if self._pending_start_marker else None)
+            end_tag = (self._pending_end_marker.encode("utf-8")
+                       if self._pending_end_marker else None)
+            if (start_tag is not None
+                    and not self._start_event.is_set()
+                    and start_tag in line):
+                self._start_event.set()
 
-                marker_buf.extend(chunk)
-                if len(marker_buf) > 8192:
-                    marker_buf = marker_buf[-4096:]
-                text = marker_buf.decode("utf-8", errors="replace")
-
-                if (self._pending_start_marker
-                        and not self._start_event.is_set()
-                        and self._pending_start_marker in text):
-                    self._start_event.set()
-
-                if self._pending_end_marker and not self._end_event.is_set():
-                    end_tag = f"{self._pending_end_marker}:"
-                    if end_tag in text:
-                        idx = text.index(end_tag)
-                        after = text[idx + len(end_tag):]
-                        code_str = after.strip().split("\n")[0].strip()
-                        try:
-                            self._pending_exit_code = int(code_str)
-                        except ValueError:
-                            self._pending_exit_code = 0
-                        self._end_event.set()
-                        marker_buf = bytearray()  # reset for next send
-            else:
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.05)
+            if end_tag is not None and not self._end_event.is_set():
+                end_prefix = end_tag + b":"
+                if end_prefix in line:
+                    after = line[line.index(end_prefix) + len(end_prefix):]
+                    code_str = after.strip()
+                    try:
+                        self._pending_exit_code = int(code_str)
+                    except ValueError:
+                        self._pending_exit_code = 0
+                    self._end_event.set()
 
         self._state = "terminated"
         self._start_event.set()
         self._end_event.set()
+
+    def _store_output(self, data):
+        """Feed one bytes line into the head/tail ring buffer."""
+        if not self._head_done:
+            remaining = self.HEAD_SIZE - len(self._head)
+            if remaining > 0:
+                take = data[:remaining]
+                self._head.extend(take)
+                leftover = data[remaining:]
+                if leftover:
+                    self._tail.extend(leftover)
+                    self._head_done = True
+            else:
+                self._tail.extend(data)
+                self._head_done = True
+        else:
+            self._tail.extend(data)
 
     def send(self, command, wait=True, timeout=30, max_output=DEFAULT_MAX_OUTPUT):
         """Send a command to the shell.
