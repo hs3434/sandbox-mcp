@@ -101,7 +101,9 @@ def test_output_truncation():
     # Generate ~16KB output fast enough to not time out on slow CI.
     result = session.send(
         "python3 -c \"import sys; [print(f'{i:05d}') for i in range(1, 2001)]\"",
-        wait=True, timeout=10, max_output=5000,
+        wait=True,
+        timeout=10,
+        max_output=5000,
     )
     assert result["status"] == "completed"
     assert "truncated" in result["output"].lower()
