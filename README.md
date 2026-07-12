@@ -29,20 +29,25 @@ tools, adding persistent environment management that the built-in tools lack.
 pip install .
 pip install -e ".[dev]"   # + test/lint tools
 
-# Run unit tests
-pytest tests/ --ignore=tests/test_integration_docker.py -v
+# Run unit tests (integration tests are skipped by default)
+pytest tests/ -v
+
+# Run integration tests (requires a running Docker daemon)
+pytest tests/ -m integration -v
 ```
 
 ### Run
 
-```bash
-# stdio mode (default, for Hermes MCP)
-sandbox-mcp
+sandbox-mcp has two transports:
 
-# HTTP/SSE mode (standalone service)
-sandbox-mcp-http
-# Then connect any MCP client to http://127.0.0.1:8010/sse
-```
+- **`sandbox-mcp-http`** — standalone HTTP/SSE service.  Start it from a shell:
+  ```bash
+  sandbox-mcp-http
+  # Then connect any MCP client to http://127.0.0.1:8010/sse
+  ```
+- **`sandbox-mcp`** (stdio) — launched by an MCP host as a child process.
+  Don't run this from a shell directly; configure it in the host (see
+  [Register with Hermes](#register-with-hermes-stdio) below).
 
 ### CLI flags
 
@@ -53,8 +58,11 @@ sandbox-mcp-http
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP port |
 
 ```bash
-sandbox-mcp -c /etc/sandbox-mcp/prod.toml
+# standalone HTTP/SSE server
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
+
+# stdio (passed via the MCP host's config; not run from a shell)
+#   see Register with Hermes below for an example
 ```
 
 Precedence (highest first): **CLI flag** → env var → config file → built-in default.
@@ -131,6 +139,12 @@ Add to `~/.hermes/config.yaml`:
 mcp_servers:
   sandbox:
     command: sandbox-mcp
+    # Optional: pass CLI flags to the server.  The same flags work as on
+    # the standalone server — sandbox-mcp reads its config from
+    # --config / $SANDBOX_MCP_CONFIG / ~/.sandbox-mcp/config.toml.
+    args:
+      - --config
+      - /etc/sandbox-mcp/prod.toml
 
 # Disable built-in tools (optional, to avoid duplicate schemas)
 agent:
@@ -139,6 +153,9 @@ agent:
     - file
     - code_execution
 ```
+
+Hermes spawns `sandbox-mcp` as a child process and pipes JSON-RPC over
+its stdin/stdout.  The server has no GUI; it just waits for requests.
 
 ## Tools
 

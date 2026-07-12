@@ -26,20 +26,25 @@
 pip install .
 pip install -e ".[dev]"   # 加上测试 / lint 工具
 
-# 跑单元测试
-pytest tests/ --ignore=tests/test_integration_docker.py -v
+# 跑单元测试（默认跳过集成测试）
+pytest tests/ -v
+
+# 跑集成测试（需要本机 Docker daemon 在跑）
+pytest tests/ -m integration -v
 ```
 
 ### 运行
 
-```bash
-# stdio 模式（默认，给 Hermes MCP 用）
-sandbox-mcp
+sandbox-mcp 有两种传输模式：
 
-# HTTP/SSE 模式（独立服务）
-sandbox-mcp-http
-# 然后用任意 MCP 客户端连 http://127.0.0.1:8010/sse
-```
+- **`sandbox-mcp-http`** —— 独立 HTTP/SSE 服务，从 shell 启动：
+  ```bash
+  sandbox-mcp-http
+  # 然后用任意 MCP 客户端连 http://127.0.0.1:8010/sse
+  ```
+- **`sandbox-mcp`**（stdio）—— 由 MCP host 作为子进程拉起。
+  不要在 shell 里直接跑这个命令，要在 host 里配置（见下面
+  [注册到 Hermes](#注册到-hermesstdio)）。
 
 ### 命令行参数
 
@@ -50,8 +55,11 @@ sandbox-mcp-http
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP 端口 |
 
 ```bash
-sandbox-mcp -c /etc/sandbox-mcp/prod.toml
+# 独立 HTTP/SSE 服务
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
+
+# stdio（在 MCP host 的配置里传，不从 shell 跑）
+#   下面"注册到 Hermes"小节有完整示例
 ```
 
 优先级（从高到低）：**CLI 参数** → 环境变量 → 配置文件 → 内置默认值。
@@ -125,6 +133,12 @@ SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
 mcp_servers:
   sandbox:
     command: sandbox-mcp
+    # 可选：给 server 传 CLI 参数。flags 跟独立服务一样——
+    # sandbox-mcp 从 --config / $SANDBOX_MCP_CONFIG / ~/.sandbox-mcp/config.toml
+    # 读配置。
+    args:
+      - --config
+      - /etc/sandbox-mcp/prod.toml
 
 # 禁用 Hermes 内置工具（可选，避免 schema 重复）
 agent:
@@ -133,6 +147,9 @@ agent:
     - file
     - code_execution
 ```
+
+Hermes 把 `sandbox-mcp` 当成子进程拉起，通过它的 stdin/stdout 走 JSON-RPC。
+server 没有 UI，只等请求。
 
 ## 工具列表
 

@@ -31,4 +31,4 @@ jobs:
       - name: Type check
         run: mypy src/sandbox_mcp
       - name: Unit tests
-        run: pytest -m "not integration" tests/ -v
+        run: pytest tests/ -v

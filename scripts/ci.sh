@@ -36,7 +36,7 @@ echo "==> mypy src/sandbox_mcp"
 mypy src/sandbox_mcp
 
 echo "==> pytest (unit)"
-pytest -m "not integration" tests/ -v
+pytest tests/ -v
 
 echo
 echo "OK — local CI passed."
