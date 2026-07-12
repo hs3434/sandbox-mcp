@@ -32,7 +32,7 @@ sandbox-mcp-init-config = "sandbox_mcp.server:main_init_config"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"sandbox_mcp" = ["*.toml"]
+"sandbox_mcp" = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

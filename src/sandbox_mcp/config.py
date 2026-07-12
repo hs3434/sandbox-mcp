@@ -59,11 +59,13 @@ from pathlib import Path
 
 
 def _load_default_config_toml() -> str:
-    """Read the bundled ``config.example.toml`` so the on-disk template
-    and the in-code fallback never drift.
+    """Read the bundled ``data/config.example.toml`` so the on-disk
+    template and the in-code fallback never drift.
     """
     return (
-        resources.files("sandbox_mcp").joinpath("config.example.toml").read_text(encoding="utf-8")
+        resources.files("sandbox_mcp.data")
+        .joinpath("config.example.toml")
+        .read_text(encoding="utf-8")
     )
 
 
