@@ -90,7 +90,6 @@ log_path = ""           # "" = stderr; set to a file path to append
 container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
 default_workdir = "/workspace"
-image_repo = "sandbox-mcp"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 

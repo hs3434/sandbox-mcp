@@ -139,6 +139,25 @@ def test_docker_run(sandbox_env):
     assert result["backend"] == "docker"
 
 
+def test_docker_commit_requires_image_tag(sandbox_env):
+    """docker_commit must reject calls without image_tag (no auto-default)."""
+    result = sandbox_env.dispatch("docker_commit", {"machine": "dev"})
+    assert "error" in result
+    assert "image_tag" in result["error"]
+
+
+def test_docker_commit_passes_image_tag(sandbox_env):
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.commit.return_value = {"image_tag": "myapp:v1", "status": "committed"}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+    result = sandbox_env.dispatch("docker_commit", {"machine": "dev", "image_tag": "myapp:v1"})
+    backend.commit.assert_called_once_with("dev", "myapp:v1")
+    assert result["status"] == "committed"
+
+
 def test_unknown_action_returns_error(sandbox_env):
     result = sandbox_env.dispatch("nonexistent", {})
     assert "error" in result

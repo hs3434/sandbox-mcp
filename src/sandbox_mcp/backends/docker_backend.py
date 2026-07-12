@@ -304,18 +304,30 @@ class DockerBackend(Backend):
 
     # ---- docker-specific extras ----
 
-    def commit(self, name: str, image_tag: str | None = None) -> dict:
+    def commit(self, name: str, image_tag: str) -> dict:
+        """Commit a container's filesystem state to ``image_tag``.
+
+        ``image_tag`` must be a fully-qualified repo:tag (e.g.
+        ``myapp:v1``).  No auto-defaulting — the caller is responsible
+        for choosing a tag that won't collide with other machines.
+        """
         docker = _docker_module()
         container_name = self._container_name(name)
-        image_repo = _load_config().docker.image_repo
-        tag = image_tag or f"{image_repo}-{name}-{int(time.time())}"
         try:
             container = self._ensure_client().containers.get(container_name)
-            repo, tag_part = ([*tag.rsplit(":", 1), ""])[:2]
-            container.commit(repository=repo or image_repo, tag=tag_part or "latest")
-            return {"image_tag": tag, "status": "committed"}
+            repo, tag_part = ([*image_tag.rsplit(":", 1), ""])[:2]
+            if not repo or ":" not in image_tag:
+                # container.commit() rejects tags without ':' — guard here
+                # with a clearer message.
+                return {
+                    "error": (f"image_tag must be 'repo:tag', got {image_tag!r}"),
+                    "image_tag": image_tag,
+                    "status": "error",
+                }
+            container.commit(repository=repo, tag=tag_part or "latest")
+            return {"image_tag": image_tag, "status": "committed"}
         except (docker.errors.APIError, docker.errors.NotFound) as e:
-            return {"error": str(e), "image_tag": tag, "status": "error"}
+            return {"error": str(e), "image_tag": image_tag, "status": "error"}
 
     def build(
         self,

@@ -139,9 +139,13 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_commit",
-            "description": "Save container state as a new image.",
-            "required": {"machine": "string"},
-            "optional": {"image_tag": "string - auto-generated if omitted"},
+            "description": (
+                "Save container state as a new image.  image_tag is REQUIRED "
+                "(format 'repo:tag', e.g. 'myapp:v1') — sandbox-mcp does not "
+                "auto-generate one, to prevent silent overwrites when multiple "
+                "machines commit."
+            ),
+            "required": {"machine": "string", "image_tag": "string"},
             "returns": {"image_tag": "string", "status": "committed"},
         },
         {
@@ -365,7 +369,14 @@ class SandboxEnv:
         )
 
     def _op_docker_commit(self, params):
-        err = self._require(params, "machine")
+        """Commit a container's filesystem state to a new image.
+
+        ``image_tag`` is required — every commit must produce a uniquely
+        identifiable image to prevent silent overwrites (e.g. two
+        concurrent ``dev`` machines both committing to the same default
+        tag).
+        """
+        err = self._require(params, "machine", "image_tag")
         if err is not None:
             return {"error": err}
         machine = self._machines.resolve_machine(params["machine"])
@@ -374,7 +385,7 @@ class SandboxEnv:
 
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_commit only supported on Docker machines"}
-        return backend.commit(machine, params.get("image_tag"))
+        return backend.commit(machine, params["image_tag"])
 
     def _op_docker_stop(self, params):
         err = self._require(params, "machine")

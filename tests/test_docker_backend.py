@@ -112,8 +112,16 @@ def test_docker_remove(docker_backend, mock_client):
 def test_docker_commit(docker_backend, mock_client):
     container = mock_client.containers.get.return_value
     result = docker_backend.commit("dev", "my-image:latest")
-    container.commit.assert_called_once()
+    container.commit.assert_called_once_with(repository="my-image", tag="latest")
     assert result["status"] == "committed"
+
+
+def test_docker_commit_requires_repo_tag(docker_backend, mock_client):
+    """Tag without ':' separator is rejected — prevents silent defaulting."""
+    result = docker_backend.commit("dev", "just-a-tag")
+    assert result["status"] == "error"
+    assert "must be 'repo:tag'" in result["error"]
+    mock_client.containers.get.return_value.commit.assert_not_called()
 
 
 def test_docker_build(docker_backend, tmp_path, monkeypatch):

@@ -85,7 +85,6 @@ log_path = ""           # "" = stderr；填文件路径则追加到文件
 container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
 default_workdir = "/workspace"
-image_repo = "sandbox-mcp"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 

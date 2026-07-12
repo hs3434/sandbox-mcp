@@ -50,7 +50,6 @@ class DockerConfig:
     container_name_prefix: str = "sandbox-"
     default_image: str = "debian:stable-slim"
     default_workdir: str = "/workspace"
-    image_repo: str = "sandbox-mcp"
     restart_policy_name: str = "on-failure"
     restart_max_retry_count: int = 3
     write_tmp_prefix: str = "/tmp/.sandbox-mcp-write-"
@@ -110,7 +109,6 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "docker_container_name_prefix": ("docker", "container_name_prefix", str),
         "docker_default_image": ("docker", "default_image", str),
         "docker_default_workdir": ("docker", "default_workdir", str),
-        "docker_image_repo": ("docker", "image_repo", str),
         "docker_restart_policy_name": ("docker", "restart_policy_name", str),
         "docker_restart_max_retry_count": ("docker", "restart_max_retry_count", int),
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
