@@ -40,10 +40,6 @@ sandbox-mcp
 # HTTP/SSE mode (standalone service)
 SANDBOX_MCP_HOST=0.0.0.0 SANDBOX_MCP_PORT=8010 sandbox-mcp-http
 # Then connect any MCP client to http://host:8010/sse
-
-# First-time: write a default config file (no-op if it already exists)
-sandbox-mcp-init-config
-# → ~/.sandbox-mcp/config.toml
 ```
 
 ### Configuration
@@ -54,10 +50,9 @@ sandbox-mcp reads config in this priority order (highest wins):
 2. **Config file** — `~/.sandbox-mcp/config.toml` (path overridable via `SANDBOX_MCP_CONFIG`)
 3. **Built-in defaults**
 
-See [`config.example.toml`](config.example.toml) for a fully commented
-reference of every key.  The same file is also bundled inside the
-package and copied to `~/.sandbox-mcp/config.toml` on first run by
-`sandbox-mcp-init-config`.
+To customize, copy [`config.example.toml`](config.example.toml) from the
+repo root to `~/.sandbox-mcp/config.toml` and edit what you need.
+Leaving it in place means all defaults are used.
 
 Config sections:
 

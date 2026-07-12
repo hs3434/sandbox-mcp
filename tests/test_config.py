@@ -8,13 +8,11 @@ from pathlib import Path
 import pytest
 
 from sandbox_mcp.config import (
-    DEFAULT_CONFIG_TOML,
     DockerConfig,
     FilesConfig,
     ServerConfig,
     ShellConfig,
     SSHConfig,
-    ensure_config_file,
     get_work_dir,
     get_work_home,
     load,
@@ -63,7 +61,6 @@ default_max_output = 1024
     assert cfg.server.port == 9999
     assert cfg.docker.default_image == "ubuntu:24.04"
     assert cfg.docker.container_name_prefix == "box-"
-    # Unset sections keep their dataclass defaults.
     assert cfg.shell.head_size == ShellConfig.head_size
     assert cfg.shell.default_max_output == 1024
 
@@ -85,7 +82,6 @@ default_image = "ubuntu:24.04"
     cfg = load()
     assert cfg.server.port == 1234
     assert cfg.docker.default_image == "alpine:3.20"
-    # Untouched env vars don't bleed in.
     assert cfg.docker.container_name_prefix == DockerConfig.container_name_prefix
 
 
@@ -108,53 +104,6 @@ future_knob = "ignored"
     cfg = load()
     assert cfg.server.host == "0.0.0.0"
     assert not hasattr(cfg.server, "future_knob")
-
-
-def test_ensure_config_file_creates_template(monkeypatch, tmp_path):
-    target = tmp_path / "sub" / "config.toml"
-    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(target))
-    written = ensure_config_file()
-    assert written == target
-    assert target.is_file()
-    assert "[server]" in target.read_text(encoding="utf-8")
-    assert "[docker]" in target.read_text(encoding="utf-8")
-
-
-def test_ensure_config_file_no_op_when_exists(monkeypatch, tmp_path):
-    target = tmp_path / "config.toml"
-    target.write_text("# custom\n", encoding="utf-8")
-    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(target))
-    ensure_config_file()
-    assert target.read_text(encoding="utf-8") == "# custom\n"
-
-
-def test_default_template_parses(tmp_path):
-    """The bundled DEFAULT_CONFIG_TOML must round-trip through tomllib."""
-    import tomllib
-
-    parsed = tomllib.loads(DEFAULT_CONFIG_TOML)
-    assert "server" in parsed
-    assert "docker" in parsed
-    assert parsed["docker"]["default_image"] == "python:3.12-slim"
-
-
-def test_repo_example_matches_inline_default():
-    """config.example.toml at the repo root is the human-facing reference.
-
-    It must stay structurally equivalent to ``DEFAULT_CONFIG_TOML`` —
-    parse both and assert the parsed dicts match.
-    """
-    import tomllib
-
-    repo_root = Path(__file__).resolve().parent.parent
-    example = (repo_root / "config.example.toml").read_text(encoding="utf-8")
-    parsed_example = tomllib.loads(example)
-    parsed_inline = tomllib.loads(DEFAULT_CONFIG_TOML)
-    assert parsed_example == parsed_inline, (
-        "config.example.toml (repo root) and DEFAULT_CONFIG_TOML "
-        "(src/sandbox_mcp/config.py) must declare the same keys + values. "
-        "Run tests to see the diff."
-    )
 
 
 def test_get_work_dir_creates_directory(monkeypatch, tmp_path):

@@ -26,7 +26,6 @@ dev = [
 [project.scripts]
 sandbox-mcp = "sandbox_mcp.server:main"
 sandbox-mcp-http = "sandbox_mcp.server:main_http"
-sandbox-mcp-init-config = "sandbox_mcp.server:main_init_config"
 
 [tool.setuptools.packages.find]
 where = ["src"]

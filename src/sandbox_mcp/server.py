@@ -19,7 +19,6 @@ import time
 from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
-from sandbox_mcp.config import ensure_config_file
 from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.file_operations import FileOperations
 from sandbox_mcp.sandbox_env import SandboxEnv
@@ -434,12 +433,6 @@ def main_http():
     )
 
     uvicorn.run(app, host=host, port=port, log_level="info")
-
-
-def main_init_config():
-    """Write a default ``~/.sandbox-mcp/config.toml`` (no-op if exists)."""
-    path = ensure_config_file()
-    print(f"sandbox-mcp config written to: {path}")
 
 
 if __name__ == "__main__":

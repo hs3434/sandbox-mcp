@@ -1,8 +1,7 @@
 # sandbox-mcp configuration reference
 #
-# This file is the human-facing reference.  Run `sandbox-mcp-init-config`
-# to copy a (slightly trimmed) version of this to:
-#   ~/.sandbox-mcp/config.toml        (default)
+# To override the built-in defaults, copy this file to:
+#   ~/.sandbox-mcp/config.toml        (default location)
 #   $SANDBOX_MCP_CONFIG               (env var override)
 #
 # Every value can also be overridden via env var (uppercased, dots → `_`).
