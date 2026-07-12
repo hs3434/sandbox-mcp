@@ -215,6 +215,59 @@ sandbox_env(action="docker_build",
 `/workspace/`. Host paths are rejected — the agent cannot reach files
 outside its assigned `work_home/<machine>/`.
 
+## HTTP authentication
+
+The HTTP/SSE transport (`sandbox-mcp-http`) requires a bearer token
+on every request.  Tokens are stored in a file, one per line:
+
+```
+~/.sandbox-mcp/auth_tokens           # default path
+```
+
+The file **must** be mode ``0600`` before sandbox-mcp will start.
+World/group readable files are rejected (fail-closed):
+
+```bash
+chmod 600 ~/.sandbox-mcp/auth_tokens
+```
+
+The path can be changed via the config file:
+
+```toml
+[server]
+auth_tokens_file = "/etc/sandbox-mcp/auth_tokens"
+```
+
+Or via an env var (overrides everything):
+
+```bash
+SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE=/run/secrets/auth_tokens sandbox-mcp-http
+```
+
+When you connect an MCP client, include the token in the
+``Authorization`` header:
+
+```bash
+curl -N -H "Authorization: Bearer <your-token>" http://127.0.0.1:8010/sse
+```
+
+### Auto-generating a dev token
+
+Set ``auto_generate_if_empty = true`` in the config file or export
+``SANDBOX_MCP_SERVER_AUTO_GENERATE_IF_EMPTY=true``.  If the token file
+is missing or empty, an ephemeral token is generated at startup and
+printed to stderr:
+
+```
+[sandbox-mcp-http] WARNING: no tokens found at ~/.sandbox-mcp/auth_tokens.
+Generated ephemeral token (capture now, will not be shown again):
+  XKTUv1Gjv2...33-chars-long
+Pass it as: Authorization: Bearer <token>
+```
+
+Capture this token and use it for the session.  The server will not
+regenerate it on restart without the file present.
+
 ## Limitations
 
 - **SSH backend uses key auth only.** Password authentication is not supported in the initial release.

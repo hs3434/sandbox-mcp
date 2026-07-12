@@ -17,6 +17,17 @@
 host = "0.0.0.0"
 port = 8010
 
+# Bearer-token auth for HTTP/SSE clients.
+# Path to the file with one accepted token per line (the file MUST be
+# mode 0600; sandbox-mcp refuses to read a world/group-readable file).
+# Overridable via $SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE.
+auth_tokens_file = "~/.sandbox-mcp/auth_tokens"
+
+# If true and auth_tokens_file is missing/empty, generate an ephemeral
+# token at startup and print it to stderr.  Default false = fail
+# closed (the server refuses to start without configured tokens).
+auto_generate_if_empty = false
+
 [storage]
 # Root directory for per-machine persistent workspaces.
 # When docker_run creates a container named "dev", sandbox-mcp will:

@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import os
+import secrets
 import time
 
 from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
@@ -440,7 +441,21 @@ def main_http(argv: list[str] | None = None):
     ``[server]`` in the config file, then the built-in default.
     The SSE endpoint is at ``/sse`` and the client message endpoint at
     ``/messages/``.
+
+    HTTP requests are gated by ``BearerAuthMiddleware``.  Tokens are
+    read from a file on disk (env > config > ``~/.sandbox-mcp/auth_tokens``).
+    If the file is missing/empty and ``auto_generate_if_empty`` is set,
+    an ephemeral token is generated and printed to stderr; otherwise the
+    server refuses to start (fail-closed).
     """
+    import sys
+
+    from sandbox_mcp.auth import (
+        generate_ephemeral_token,
+        load_auth_tokens,
+        resolve_tokens_file,
+    )
+
     args = _build_arg_parser(
         prog="sandbox-mcp-http",
         with_http=True,
@@ -452,6 +467,35 @@ def main_http(argv: list[str] | None = None):
     host = server_cfg.host
     port = server_cfg.port
     reset_default_logger()  # honour [audit] log_path
+
+    # --- Resolve tokens ---------------------------------------------------
+    tokens_file = resolve_tokens_file()
+    tokens = load_auth_tokens(tokens_file)
+    if not tokens:
+        if server_cfg.auto_generate_if_empty:
+            ephemeral = generate_ephemeral_token()
+            tokens = (ephemeral,)
+            print(
+                "\n[sandbox-mcp-http] WARNING: no tokens found at "
+                f"{tokens_file}.\n"
+                "Generated ephemeral token (capture now, will not be shown again):\n"
+                f"  {ephemeral}\n"
+                "Pass it as: Authorization: Bearer <token>\n",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                "[sandbox-mcp-http] FATAL: no auth tokens configured.\n"
+                f"  Create {tokens_file} with one bearer token per line, then\n"
+                "  chmod 600 it.  Or set:\n"
+                "    [server] auto_generate_if_empty = true  (ephemeral dev token)\n"
+                "  or\n"
+                "    $SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE  (custom path)\n",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.exit(1)
 
     import mcp.types as types
     import uvicorn
@@ -465,6 +509,7 @@ def main_http(argv: list[str] | None = None):
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
     logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
+    logger.info("Loaded %d bearer token(s) from %s", len(tokens), tokens_file)
 
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
@@ -498,8 +543,69 @@ def main_http(argv: list[str] | None = None):
             Route("/messages/", endpoint=handle_messages, methods=["POST"]),
         ],
     )
+    # Wrap with bearer-token auth.  Middleware sits OUTSIDE the routes so
+    # /sse and /messages/ are both gated.  Health checks (none defined
+    # yet) could be added with an allowlist path check.
+    app.add_middleware(BearerAuthMiddleware, tokens=tokens)
 
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+class BearerAuthMiddleware:
+    """Starlette ASGI middleware that requires ``Authorization: Bearer <t>``.
+
+    Tokens are compared in constant time via ``secrets.compare_digest``
+    to defeat timing side-channels.  Failures respond ``401 Unauthorized``
+    with a ``WWW-Authenticate: Bearer`` challenge so MCP clients know
+    how to retry.
+    """
+
+    def __init__(self, app, tokens: tuple[str, ...]) -> None:
+        self.app = app
+        self.tokens = tokens
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Find Authorization header (case-insensitive lookup per RFC 7230).
+        headers = {
+            k.decode("ascii").lower(): v.decode("ascii", errors="replace")
+            for k, v in scope.get("headers", [])
+        }
+        auth = headers.get("authorization", "")
+        if not auth.startswith("Bearer "):
+            await _send_401(send, "missing or malformed Authorization header")
+            return
+        presented = auth[len("Bearer ") :].strip()
+        if not presented:
+            await _send_401(send, "empty bearer token")
+            return
+        if not any(secrets.compare_digest(presented, t) for t in self.tokens):
+            await _send_401(send, "invalid token")
+            return
+
+        await self.app(scope, receive, send)
+
+
+async def _send_401(send, reason: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"www-authenticate", b'Bearer realm="sandbox-mcp"'),
+            ],
+        }
+    )
+    await send(
+        {
+            "type": "http.response.body",
+            "body": f"401 unauthorized: {reason}\n".encode(),
+        }
+    )
 
 
 if __name__ == "__main__":

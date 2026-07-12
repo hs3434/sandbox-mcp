@@ -208,6 +208,54 @@ sandbox_env(action="docker_build",
 **沙箱边界保护**：`dockerfile` 和 `context_dir` 必须在 `/workspace/` 下，
 宿主路径会被拒绝 —— 防止 agent 读到 `work_home` 之外的文件。
 
+## HTTP 鉴权
+
+HTTP/SSE 模式（`sandbox-mcp-http`）需要 bearer token 鉴权。token 存在文件里，一行一个：
+
+```
+~/.sandbox-mcp/auth_tokens           # 默认路径
+```
+
+**文件必须 0600 权限**，否则 sandbox-mcp 拒绝启动（fail-closed）：
+
+```bash
+chmod 600 ~/.sandbox-mcp/auth_tokens
+```
+
+路径可在 `config.toml` 里改：
+
+```toml
+[server]
+auth_tokens_file = "/etc/sandbox-mcp/auth_tokens"
+```
+
+或通过环境变量（优先级最高）：
+
+```bash
+SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE=/run/secrets/auth_tokens sandbox-mcp-http
+```
+
+MCP 客户端连接时传 `Authorization: Bearer <token>` header：
+
+```bash
+curl -N -H "Authorization: Bearer <你的token>" http://127.0.0.1:8010/sse
+```
+
+### 自动生成开发用 token
+
+在 `config.toml` 里设 `auto_generate_if_empty = true`，
+或导出 `SANDBOX_MCP_SERVER_AUTO_GENERATE_IF_EMPTY=true`。
+如果 token 文件不存在或为空，启动时生成一个临时 token 并打印到 stderr：
+
+```
+[sandbox-mcp-http] WARNING: no tokens found at ~/.sandbox-mcp/auth_tokens.
+Generated ephemeral token (capture now, will not be shown again):
+  XKTUv1Gjv2...33-chars-long
+Pass it as: Authorization: Bearer <token>
+```
+
+拷贝这个 token 给当前 session 用。server 重启后不会重复生成同一个（文件还在会读文件）。
+
 ## 限制
 
 - **SSH backend 只支持 key 认证**。当前版本不支持密码认证。

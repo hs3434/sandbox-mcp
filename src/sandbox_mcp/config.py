@@ -14,8 +14,14 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+
+def _as_bool(raw: str) -> bool:
+    """Parse a string env-var value as a bool (1/0/true/false/yes/no/on/off)."""
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_config_path() -> Path:
@@ -29,6 +35,14 @@ def _default_config_path() -> Path:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8010
+    # Path to the file containing accepted bearer tokens (one per line).
+    # Overridable via the [server] table in config.toml or the
+    # SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE env var.
+    auth_tokens_file: str = "~/.sandbox-mcp/auth_tokens"
+    # If true, generate an ephemeral token at startup when the file is
+    # missing/empty.  Default false = fail closed (server refuses to
+    # start without configured tokens).
+    auto_generate_if_empty: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,9 +115,11 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "files": {},
     }
 
-    env_map = {
+    env_map: dict[str, tuple[str, str, Callable[[str], object]]] = {
         "server_host": ("server", "host", str),
         "server_port": ("server", "port", int),
+        "server_auth_tokens_file": ("server", "auth_tokens_file", str),
+        "server_auto_generate_if_empty": ("server", "auto_generate_if_empty", _as_bool),
         "storage_work_home": ("storage", "work_home", str),
         "audit_log_path": ("audit", "log_path", str),
         "docker_container_name_prefix": ("docker", "container_name_prefix", str),
