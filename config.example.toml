@@ -46,12 +46,13 @@ socket_dir_prefix = "sandbox-mcp-ssh-"
 tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
 
 [shell]
+# Buffer sizes and the default per-call output cap (in bytes).
 # HEAD_SIZE captures the start of the stream; TAIL_SIZE is a ring buffer
 # for the tail.  When output exceeds HEAD+TAIL, the head is dropped and
 # only the tail is kept.
+default_max_output = 50000  # 50 KB — also the truncation threshold
 head_size = 5120          # 5 KB
 tail_size = 46080         # 45 KB
-default_max_output = 50000  # 50 KB — also the truncation threshold
 
 [files]
 # Hard cap on file_read payload size (bytes).  Files larger than this

@@ -121,3 +121,53 @@ def test_storage_work_home_expands_tilde(monkeypatch):
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", "~/custom-workspaces/")
     cfg = load()
     assert cfg.storage.work_home == (Path.home() / "custom-workspaces").resolve()
+
+
+def test_repo_example_matches_dataclass_defaults():
+    """Drift guard: every key in config.example.toml must match the
+    dataclass field defaults.  Catches the case where someone bumps a
+    default in config.py and forgets to update the human-facing
+    reference (or vice versa).
+    """
+    import tomllib
+    from dataclasses import fields
+
+    from sandbox_mcp.config import AppConfig
+
+    repo_root = Path(__file__).resolve().parent.parent
+    parsed = tomllib.loads((repo_root / "config.example.toml").read_text(encoding="utf-8"))
+
+    expected: dict[str, dict[str, object]] = {}
+    for section_name, section_obj in AppConfig().__dict__.items():
+        # ``section_obj`` is a frozen dataclass instance.
+        section_dict: dict[str, object] = {}
+        for f in fields(section_obj):
+            value = getattr(section_obj, f.name)
+            # StorageConfig.work_home is resolved to an absolute Path at
+            # __post_init__ time; the example file ships the un-resolved
+            # "~/.sandbox-mcp/workspaces/" form for portability.
+            if section_name == "storage" and f.name == "work_home":
+                value = "~/.sandbox-mcp/workspaces/"
+            section_dict[f.name] = value
+        expected[section_name] = section_dict
+
+    assert parsed == expected, (
+        f"config.example.toml does not match AppConfig() defaults.\n"
+        f"  parsed: {parsed}\n  expected: {expected}"
+    )
+
+
+def test_repo_example_uses_known_sections():
+    """Every TOML section must map to a known AppConfig sub-dataclass."""
+    import tomllib
+
+    from sandbox_mcp.config import AppConfig
+
+    repo_root = Path(__file__).resolve().parent.parent
+    parsed = tomllib.loads((repo_root / "config.example.toml").read_text(encoding="utf-8"))
+    valid_sections = set(AppConfig().__dict__.keys())
+    assert set(parsed.keys()) == valid_sections, (
+        f"Unknown sections in config.example.toml: "
+        f"{set(parsed.keys()) - valid_sections}; "
+        f"missing sections: {valid_sections - set(parsed.keys())}"
+    )

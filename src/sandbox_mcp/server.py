@@ -8,12 +8,28 @@ Tools exposed via MCP tools/list:
   - sandbox_file_patch
   - sandbox_file_search
   - sandbox_env  (progressive discovery)
+
+CLI flags
+---------
+
+Both ``sandbox-mcp`` (stdio) and ``sandbox-mcp-http`` (SSE) accept:
+
+- ``--config PATH`` / ``-c PATH``: path to a TOML config file (defaults to
+  ``~/.sandbox-mcp/config.toml``).  Overrides ``SANDBOX_MCP_CONFIG``.
+- ``--host ADDR``: HTTP bind address (HTTP mode only).  Overrides the
+  ``[server] host`` value and ``SANDBOX_MCP_SERVER_HOST``.
+- ``--port N``: HTTP port (HTTP mode only).  Overrides the ``[server] port``
+  value and ``SANDBOX_MCP_SERVER_PORT``.
+
+Precedence (highest first): CLI flag → env var → config file → built-in default.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
+import os
 import time
 
 from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
@@ -26,6 +42,45 @@ from sandbox_mcp.shell_registry import ShellRegistry
 from sandbox_mcp.target_registry import TargetRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _build_arg_parser(*, prog: str, with_http: bool, description: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description=description)
+    parser.add_argument(
+        "--config",
+        "-c",
+        help=(
+            "Path to config.toml. Overrides $SANDBOX_MCP_CONFIG and "
+            "the default ~/.sandbox-mcp/config.toml."
+        ),
+    )
+    if with_http:
+        parser.add_argument(
+            "--host",
+            "-H",
+            help="HTTP bind address. Overrides [server] host and $SANDBOX_MCP_SERVER_HOST.",
+        )
+        parser.add_argument(
+            "--port",
+            "-p",
+            type=int,
+            help="HTTP port. Overrides [server] port and $SANDBOX_MCP_SERVER_PORT.",
+        )
+    return parser
+
+
+def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
+    """Translate CLI flags into SANDBOX_MCP_* env vars so the rest of the
+    config pipeline (which only reads env vars + config file) sees them.
+
+    CLI wins over any pre-set env var.
+    """
+    if args.config:
+        os.environ["SANDBOX_MCP_CONFIG"] = args.config
+    if getattr(args, "host", None):
+        os.environ["SANDBOX_MCP_SERVER_HOST"] = args.host
+    if getattr(args, "port", None) is not None:
+        os.environ["SANDBOX_MCP_SERVER_PORT"] = str(args.port)
 
 
 TOOL_DEFINITIONS = [
@@ -335,9 +390,16 @@ class SandboxServer:
         return self.sandbox_env.dispatch(action, params)
 
 
-def main():
+def main(argv: list[str] | None = None):
     """Entry point: run the MCP server over stdio."""
     import asyncio
+
+    args = _build_arg_parser(
+        prog="sandbox-mcp",
+        with_http=False,
+        description="Run sandbox-mcp over stdio (for Hermes and other MCP hosts).",
+    ).parse_args(argv)
+    _apply_cli_overrides_to_env(args)
 
     try:
         import mcp.types as types
@@ -371,15 +433,20 @@ def main():
     asyncio.run(run())
 
 
-def main_http():
+def main_http(argv: list[str] | None = None):
     """Entry point: run the MCP server as an HTTP SSE service.
 
-    Listens on ``[server] host`` (default ``0.0.0.0``) and
-    ``[server] port`` (default ``8010``) in ``~/.sandbox-mcp/config.toml``
-    — overridable via ``SANDBOX_MCP_SERVER_HOST`` / ``SANDBOX_MCP_SERVER_PORT``.
+    Bind address comes from CLI ``--host`` / ``--port``, then
+    ``[server]`` in the config file, then the built-in default.
     The SSE endpoint is at ``/sse`` and the client message endpoint at
     ``/messages/``.
     """
+    args = _build_arg_parser(
+        prog="sandbox-mcp-http",
+        with_http=True,
+        description="Run sandbox-mcp as a standalone HTTP/SSE MCP server.",
+    ).parse_args(argv)
+    _apply_cli_overrides_to_env(args)
 
     server_cfg = _load_config().server
     host = server_cfg.host

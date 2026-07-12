@@ -38,17 +38,34 @@ pytest tests/ --ignore=tests/test_integration_docker.py -v
 sandbox-mcp
 
 # HTTP/SSE mode (standalone service)
-SANDBOX_MCP_HOST=0.0.0.0 SANDBOX_MCP_PORT=8010 sandbox-mcp-http
-# Then connect any MCP client to http://host:8010/sse
+sandbox-mcp-http
+# Then connect any MCP client to http://127.0.0.1:8010/sse
 ```
+
+### CLI flags
+
+| flag | applies to | purpose |
+|---|---|---|
+| `--config PATH` / `-c PATH` | both | path to a TOML config file |
+| `--host ADDR` / `-H ADDR` | `sandbox-mcp-http` | HTTP bind address |
+| `--port N` / `-p N` | `sandbox-mcp-http` | HTTP port |
+
+```bash
+sandbox-mcp -c /etc/sandbox-mcp/prod.toml
+sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
+```
+
+Precedence (highest first): **CLI flag** → env var → config file → built-in default.
 
 ### Configuration
 
 sandbox-mcp reads config in this priority order (highest wins):
 
-1. **Environment variables** — `SANDBOX_MCP_*` (see below)
-2. **Config file** — `~/.sandbox-mcp/config.toml` (path overridable via `SANDBOX_MCP_CONFIG`)
-3. **Built-in defaults**
+1. **CLI flags** (see above)
+2. **Environment variables** — `SANDBOX_MCP_*` (e.g. `SANDBOX_MCP_SERVER_PORT`)
+3. **Config file** — `~/.sandbox-mcp/config.toml` by default; overridden by
+   `--config PATH` / `SANDBOX_MCP_CONFIG`
+4. **Built-in defaults** (declared in `src/sandbox_mcp/config.py`)
 
 To customize, copy [`config.example.toml`](config.example.toml) from the
 repo root to `~/.sandbox-mcp/config.toml` and edit what you need.
