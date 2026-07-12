@@ -54,6 +54,11 @@ sandbox-mcp reads config in this priority order (highest wins):
 2. **Config file** — `~/.sandbox-mcp/config.toml` (path overridable via `SANDBOX_MCP_CONFIG`)
 3. **Built-in defaults**
 
+See [`config.example.toml`](config.example.toml) for a fully commented
+reference of every key.  The same file is also bundled inside the
+package and copied to `~/.sandbox-mcp/config.toml` on first run by
+`sandbox-mcp-init-config`.
+
 Config sections:
 
 ```toml

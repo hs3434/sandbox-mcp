@@ -31,6 +31,9 @@ sandbox-mcp-init-config = "sandbox_mcp.server:main_init_config"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"sandbox_mcp" = ["*.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
