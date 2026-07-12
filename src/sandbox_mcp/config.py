@@ -66,6 +66,11 @@ class AuditConfig:
 
 @dataclass(frozen=True)
 class DockerConfig:
+    # container_name_prefix is the ONLY thing separating sandbox-mcp's
+    # containers from anything else on the host.  An empty prefix would
+    # let ``docker_run(name="nginx")`` create / manage a host-managed
+    # ``nginx`` container, so the field is validated to be non-empty at
+    # construction time.
     container_name_prefix: str = "sandbox-"
     default_image: str = "debian:stable-slim"
     default_workdir: str = "/workspace"
@@ -75,6 +80,15 @@ class DockerConfig:
     # User-defined bridge network for DNS-resolvable container-to-container
     # communication.  Created lazily on first docker_run.  Empty = no network.
     auto_network: str = "sandbox-mcp"
+
+    def __post_init__(self) -> None:
+        if not self.container_name_prefix:
+            raise ValueError(
+                "container_name_prefix must be non-empty: it is the namespace "
+                "separator between sandbox-mcp's containers and the host's. "
+                "Set it in [docker] container_name_prefix in config.toml."
+            )
+
     # Docker daemon connection.  Empty ``host`` falls back to ``from_env()``,
     # which reads ``$DOCKER_HOST`` / ``$DOCKER_TLS_VERIFY`` / ``$DOCKER_CERT_PATH``
     # and the docker CLI context.  Setting ``host`` here is equivalent to

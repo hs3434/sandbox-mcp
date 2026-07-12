@@ -421,8 +421,40 @@ class SandboxEnv:
     # ---- docker discovery (direct daemon queries) ----
 
     def _op_docker_ps(self, params):
-        name_prefix = params.get("name_prefix", "sandbox-")
-        return {"containers": self._docker.list_containers(name_prefix=name_prefix)}
+        """List sandbox-mcp-managed containers.
+
+        Walks the :class:`TargetRegistry` and queries each registered
+        docker machine for its current status.  This replaces the
+        earlier ``list_containers(name_prefix=...)`` path which took an
+        agent-supplied prefix and could be used to enumerate every
+        container on the host (nginx, postgres, etc.) — i.e. host
+        fingerprinting.  The agent's view is now constrained to the
+        machines registered in :class:`TargetRegistry`, which is
+        sandbox-mcp's authoritative source of truth.
+        """
+        # Duck-type the docker backend: only it has ``ensure_network``.
+        # This keeps the dispatcher decoupled from the import and lets
+        # tests pass a MagicMock without registering it as DockerBackend.
+        containers = []
+        for name in self._machines.list_machines():
+            backend = self._machines.get_backend(name)
+            if not hasattr(backend, "ensure_network"):
+                continue  # SSH backend, not a docker container
+            try:
+                info = backend.get_info(name)
+            except Exception:
+                continue
+            containers.append(
+                {
+                    "name": info.name,
+                    "status": info.status,
+                    "image": info.image or "",
+                    "created": info.created or "",
+                }
+            )
+        # Newest first.
+        containers.sort(key=lambda c: c["created"], reverse=True)
+        return {"containers": containers}
 
     def _op_docker_images(self, params):
         return {"images": self._docker.list_images()}

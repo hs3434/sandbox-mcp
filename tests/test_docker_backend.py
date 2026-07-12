@@ -442,6 +442,47 @@ def test_docker_list_images(docker_backend, mock_client):
     assert docker_backend.list_images() == []
 
 
+def test_docker_list_images_returns_only_managed_and_built(docker_backend, mock_client):
+    """``list_images()`` must not leak the host's full image inventory.
+
+    Only images that are either (a) in use by a registered sandbox
+    machine or (b) built via ``docker_build`` are visible to the agent.
+    The daemon may host private / internal / unrelated images; the
+    agent has no business seeing them.
+    """
+    # Image #1: in use by a registered container (returns short_id only).
+    in_use_image = MagicMock()
+    in_use_image.tags = []  # pulled without tagging, e.g. "postgres:16" by digest
+    in_use_image.short_id = "sha256:aaa111"
+    # Image #2: built via docker_build (recorded in _built_images).
+    built_image = MagicMock()
+    built_image.tags = ["myapp:v1"]
+    built_image.short_id = "sha256:bbb222"
+    # Image #3: present on host but NEITHER in use NOR built — must be filtered out.
+    leaked_image = MagicMock()
+    leaked_image.tags = ["internal-payment-api:v2.3"]
+    leaked_image.short_id = "sha256:ccc333"
+    mock_client.images.list.return_value = [in_use_image, built_image, leaked_image]
+
+    docker_backend._built_images = {"myapp:v1"}  # type: ignore[attr-defined]
+    docker_backend._managed_images = {"sha256:aaa111"}  # type: ignore[attr-defined]
+
+    result = docker_backend.list_images()
+    ids = {img["image_id"] for img in result}
+    assert ids == {"sha256:aaa111", "sha256:bbb222"}, f"unmanaged images leaked to agent: {result}"
+
+
+def test_docker_create_rejects_name_with_prefix(docker_backend, mock_client):
+    """``docker_run(name="sandbox-foo")`` would create ``sandbox-sandbox-foo`` —
+    confusing because the agent looks like it's reaching for a host-managed
+    container.  Reject names that already start with the configured prefix.
+    """
+    info = docker_backend.create(name="sandbox-attacker", purpose="t", image="alpine:3")
+    assert info.status == "error", f"expected rejection, got {info!r}"
+    assert "prefix" in info.error.lower()
+    mock_client.containers.run.assert_not_called()
+
+
 # ---- auto-network ----
 
 

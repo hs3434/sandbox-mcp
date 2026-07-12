@@ -15,6 +15,12 @@ class TargetInfo:
     shells: int = 0
     uptime: str = ""
     error: str = ""
+    # Optional backend-supplied metadata.  ``docker`` backend fills
+    # ``image`` (tag or short_id) and ``created`` (ISO8601).  ``ssh``
+    # backend leaves them empty.  Used by ``docker_ps`` and
+    # ``machine_list`` to render rich views without re-querying the daemon.
+    image: str = ""
+    created: str = ""
 
 
 class Backend(ABC):

@@ -169,17 +169,24 @@ def test_missing_required_param_returns_error(sandbox_env):
 
 
 def test_docker_ps_returns_container_list(sandbox_env):
-    sandbox_env._docker.list_containers.return_value = [
+    """`docker_ps` walks the registry, so a single registered machine
+    surfaces one container."""
+    sandbox_env._machines.list_machines.return_value = ["dev"]
+    sandbox_env._machines.get_backend.return_value = sandbox_env._docker
+    sandbox_env._docker.get_info.return_value = type(
+        "I",
+        (),
         {
-            "name": "sandbox-dev",
+            "name": "dev",
             "status": "running",
             "image": "python:3.12",
             "created": "2025-01-01T00:00:00Z",
         },
-    ]
-    result = sandbox_env.dispatch("docker_ps", {"name_prefix": "sandbox-"})
+    )()
+    result = sandbox_env.dispatch("docker_ps", {})
     assert "containers" in result
-    assert result["containers"][0]["name"] == "sandbox-dev"
+    assert result["containers"][0]["name"] == "dev"
+    assert result["containers"][0]["status"] == "running"
 
 
 def test_docker_images_returns_images(sandbox_env):
@@ -189,3 +196,37 @@ def test_docker_images_returns_images(sandbox_env):
     result = sandbox_env.dispatch("docker_images", {})
     assert "images" in result
     assert result["images"][0]["tag"] == "python:3.12"
+
+
+def test_docker_ps_ignores_agent_name_prefix_override(sandbox_env):
+    """Agent-supplied ``name_prefix`` was a host-fingerprinting vector —
+    passing ``name_prefix=""`` enumerated every container on the host.
+    The dispatcher no longer calls ``list_containers(name_prefix=...)``;
+    instead it walks the registry and queries each registered machine
+    via ``get_info``.
+    """
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    sandbox_env._machines.list_machines.return_value = ["dev", "db"]
+    sandbox_env._machines.get_backend.return_value = sandbox_env._docker
+    sandbox_env._docker.get_info.side_effect = [
+        type(
+            "I",
+            (),
+            {"name": "dev", "status": "running", "image": "alpine:3", "created": "2026-01-01"},
+        )(),
+        type(
+            "I",
+            (),
+            {"name": "db", "status": "running", "image": "postgres:16", "created": "2026-01-02"},
+        )(),
+    ]
+    assert isinstance(sandbox_env._docker, DockerBackend) or True  # duck-typed
+
+    # Even if agent passes name_prefix="", the dispatcher ignores it and
+    # only surfaces registered machines.
+    result = sandbox_env.dispatch("docker_ps", {"name_prefix": ""})
+    assert [c["name"] for c in result["containers"]] == ["db", "dev"]
+    # Critical: list_containers(name_prefix=...) must NOT be the path
+    # anymore — that was the host-fingerprinting vector.
+    sandbox_env._docker.list_containers.assert_not_called()

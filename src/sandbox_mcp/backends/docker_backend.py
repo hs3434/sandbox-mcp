@@ -186,6 +186,12 @@ class DockerBackend(Backend):
     def __init__(self):
         self._client = None  # lazy init
         self._started_at: dict[str, float] = {}
+        # Tracks images the agent is allowed to see via ``list_images()``:
+        # images in use by sandbox-mcp containers + images built via
+        # ``docker_build``.  Anything else on the host is invisible to
+        # the agent (no internal-company image fingerprinting).
+        self._managed_images: set[str] = set()  # by short_id
+        self._built_images: set[str] = set()  # by tag, e.g. "myapp:v1"
 
     def _ensure_client(self):
         """Return a cached DockerClient, building one on first use.
@@ -238,6 +244,21 @@ class DockerBackend(Backend):
 
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
+        # Reject names that already include the prefix: ``docker_run(name="sandbox-foo")``
+        # would create ``sandbox-sandbox-foo`` and confuse namespace bookkeeping.
+        # The prefix belongs to the tool, not the agent.
+        if name.startswith(docker_cfg.container_name_prefix):
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="error",
+                purpose=purpose,
+                error=(
+                    f"name must not start with the configured prefix "
+                    f"{docker_cfg.container_name_prefix!r}; that's reserved for "
+                    f"sandbox-mcp's own naming."
+                ),
+            )
         image = kwargs.get("image", docker_cfg.default_image)
         # Note: agent-supplied ``volumes`` mounts are intentionally NOT
         # accepted.  The only bind mount is the auto-attached work_home
@@ -314,8 +335,24 @@ class DockerBackend(Backend):
                 error=f"Image {image} not found",
             )
 
+        # Track the image's short_id so ``list_images()`` can surface it
+        # later.  Other images on the host remain invisible to the agent.
+        # Not fatal if the lookup fails (image already gone, by-digest,
+        # network blip) — just means it won't appear in ``docker_images``.
+        with contextlib.suppress(Exception):
+            self._managed_images.add(self._ensure_client().images.get(image).short_id)
+
         self._started_at[name] = time.time()
-        return TargetInfo(name=name, backend="docker", status="running", purpose=purpose)
+        # ``created`` is filled in lazily by ``get_info`` (it queries the
+        # daemon for accurate timestamps).  Mark the machine as running
+        # so the dispatcher can surface it in ``docker_ps`` immediately.
+        return TargetInfo(
+            name=name,
+            backend="docker",
+            status="running",
+            purpose=purpose,
+            image=image,
+        )
 
     def start(self, name: str) -> TargetInfo:
         docker = _docker_module()
@@ -356,10 +393,17 @@ class DockerBackend(Backend):
             container = self._ensure_client().containers.get(container_name)
             status = container.attrs.get("State", {}).get("Status", "unknown")
             running = status == "running"
+            image = (
+                container.image.tags[0]
+                if container.image.tags
+                else (container.image.short_id or "")
+            )
             return TargetInfo(
                 name=name,
                 backend="docker",
                 status="running" if running else "stopped",
+                image=image,
+                created=container.attrs.get("Created", ""),
             )
         except (docker.errors.APIError, docker.errors.NotFound):
             return TargetInfo(name=name, backend="docker", status="error")
@@ -468,6 +512,9 @@ class DockerBackend(Backend):
                 tag=image_tag,
                 rm=True,
             )
+            # Track so list_images() can surface it; otherwise the agent
+            # wouldn't see images it just built (would only see base images).
+            self._built_images.add(image_tag)
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
@@ -514,6 +561,21 @@ class DockerBackend(Backend):
         return result
 
     def list_images(self) -> list[dict]:
+        """Return images sandbox-mcp manages — NOT the host's full inventory.
+
+        Visibility is filtered to:
+
+        - images **in use** by a container this backend created
+          (tracked via ``_managed_images`` short_ids, populated in
+          :meth:`create`); and
+        - images **built** via :meth:`build` (tracked via
+          ``_built_images`` tags).
+
+        Anything else on the host — private internal images, base
+        images the agent hasn't pulled yet, unrelated images — stays
+        invisible.  The agent has no business fingerprinting the host's
+        image library.
+        """
         docker = _docker_module()
         try:
             images = self._ensure_client().images.list(all=True)
@@ -521,12 +583,19 @@ class DockerBackend(Backend):
             return []
         result = []
         for img in images:
-            tags = img.tags if img.tags else [f"<none>:{img.short_id}"]
-            for tag in tags:
+            short_id = img.short_id
+            tags = img.tags or []
+            visible = short_id in self._managed_images or any(t in self._built_images for t in tags)
+            if not visible:
+                continue
+            # Surface the image under its tags if it has any, otherwise
+            # under its short_id (pulled-by-digest images).
+            display_tags = tags if tags else [f"<none>:{short_id}"]
+            for tag in display_tags:
                 result.append(
                     {
                         "tag": tag,
-                        "image_id": img.short_id,
+                        "image_id": short_id,
                         "created": img.attrs.get("Created", ""),
                         "size_mb": round(img.attrs.get("Size", 0) / (1024 * 1024), 1),
                     }

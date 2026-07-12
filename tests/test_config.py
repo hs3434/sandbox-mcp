@@ -157,6 +157,18 @@ def test_repo_example_matches_dataclass_defaults():
     )
 
 
+def test_docker_config_rejects_empty_prefix(monkeypatch):
+    """container_name_prefix must not be empty — it's the only thing that
+    separates sandbox-mcp's containers from the host's.  An empty prefix
+    would let ``docker_run(name='nginx')`` create / manage a host-side
+    ``nginx`` container.
+    """
+    from sandbox_mcp.config import DockerConfig
+
+    with pytest.raises(ValueError, match="container_name_prefix"):
+        DockerConfig(container_name_prefix="")
+
+
 def test_repo_example_uses_known_sections():
     """Every TOML section must map to a known AppConfig sub-dataclass."""
     import tomllib
