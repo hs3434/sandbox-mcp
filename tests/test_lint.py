@@ -28,13 +28,15 @@ def test_ruff_format_check():
     """``ruff format --check .`` must pass.
 
     On failure the diff is included so the developer can see what to
-    fix without leaving the test runner.
+    fix without leaving the test runner.  A 60s timeout guards against
+    ruff hanging in CI.
     """
     result = subprocess.run(
         ["ruff", "format", "--check", "."],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        timeout=60,
     )
     assert result.returncode == 0, (
         f"ruff format --check failed.  Run `ruff format .` to fix.\n"
@@ -47,12 +49,14 @@ def test_ruff_check():
     """``ruff check .`` must pass (no lint errors).
 
     Auto-fixable issues can be cleared with ``ruff check --fix .``.
+    A 60s timeout guards against ruff hanging in CI.
     """
     result = subprocess.run(
         ["ruff", "check", "."],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        timeout=60,
     )
     assert result.returncode == 0, (
         f"ruff check failed.  Run `ruff check --fix .` to fix.\n"
