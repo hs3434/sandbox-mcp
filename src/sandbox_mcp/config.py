@@ -54,22 +54,51 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field, replace
-from importlib import resources
 from pathlib import Path
 
+# NOTE: Keep this in sync with config.example.toml at the repo root.
+# The repo-root file is the human-facing reference (visible on GitHub);
+# this string is what `sandbox-mcp-init-config` writes the first time
+# someone runs it.  test_config.py asserts the two match.
+DEFAULT_CONFIG_TOML = """# sandbox-mcp configuration
+# Every value can also be overridden via env var (SANDBOX_MCP_*).
 
-def _load_default_config_toml() -> str:
-    """Read the bundled ``data/config.example.toml`` so the on-disk
-    template and the in-code fallback never drift.
-    """
-    return (
-        resources.files("sandbox_mcp.data")
-        .joinpath("config.example.toml")
-        .read_text(encoding="utf-8")
-    )
+[server]
+host = "0.0.0.0"
+port = 8010
 
+[storage]
+work_home = "~/.sandbox-mcp/workspaces/"
 
-DEFAULT_CONFIG_TOML = _load_default_config_toml()
+[audit]
+log_path = ""
+
+[docker]
+container_name_prefix = "sandbox-"
+default_image = "python:3.12-slim"
+default_workdir = "/workspace"
+image_repo = "sandbox-mcp"
+restart_policy_name = "on-failure"
+restart_max_retry_count = 3
+write_tmp_prefix = "/tmp/.sandbox-mcp-write-"
+
+[ssh]
+connect_timeout = 10
+socket_dir_prefix = "sandbox-mcp-ssh-"
+tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
+
+[shell]
+default_max_output = 50000
+head_size = 5120
+tail_size = 46080
+
+[files]
+max_file_size = 51200
+max_line_length = 2000
+default_read_limit = 500
+max_read_limit = 2000
+default_search_limit = 50
+"""
 
 
 def _default_config_path() -> Path:

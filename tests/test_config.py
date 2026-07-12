@@ -138,6 +138,25 @@ def test_default_template_parses(tmp_path):
     assert parsed["docker"]["default_image"] == "python:3.12-slim"
 
 
+def test_repo_example_matches_inline_default():
+    """config.example.toml at the repo root is the human-facing reference.
+
+    It must stay structurally equivalent to ``DEFAULT_CONFIG_TOML`` —
+    parse both and assert the parsed dicts match.
+    """
+    import tomllib
+
+    repo_root = Path(__file__).resolve().parent.parent
+    example = (repo_root / "config.example.toml").read_text(encoding="utf-8")
+    parsed_example = tomllib.loads(example)
+    parsed_inline = tomllib.loads(DEFAULT_CONFIG_TOML)
+    assert parsed_example == parsed_inline, (
+        "config.example.toml (repo root) and DEFAULT_CONFIG_TOML "
+        "(src/sandbox_mcp/config.py) must declare the same keys + values. "
+        "Run tests to see the diff."
+    )
+
+
 def test_get_work_dir_creates_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     wd = get_work_dir("mybox")
