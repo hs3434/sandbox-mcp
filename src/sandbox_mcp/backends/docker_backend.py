@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.config import get_work_dir
 from sandbox_mcp.shell_session import ShellSession
 
 
@@ -168,6 +169,13 @@ class DockerBackend(Backend):
         workdir = kwargs.get("workdir", "/workspace")
 
         container_name = self._container_name(name)
+
+        # Auto-create a persistent workspace directory on the host and mount
+        # it to /workspace inside the container.  The agent never sees the
+        # host path — it just works in /workspace.
+        machine_dir = get_work_dir(name)
+        volumes = list(volumes)  # copy so we don't mutate the caller's list
+        volumes.append(f"{machine_dir}:/workspace")
         port_bindings: dict = {}
         for p in ports:
             host_part, _, container_part = p.partition(":")

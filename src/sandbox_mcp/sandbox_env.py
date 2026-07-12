@@ -86,11 +86,11 @@ DOCKER_HELP_RESPONSE = {
                 "Create and start a Docker container. Idempotent: "
                 "if a container named sandbox-<name> already exists "
                 "(e.g. after an MCP restart), the call attaches to "
-                "it instead of creating a new one."
+                "it instead of creating a new one. An automatic workspace "
+                "directory is created on the host and mounted to /workspace."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "optional": {
-                "volumes": "string[] - e.g. ['/host:/container']",
                 "ports": "string[] - e.g. ['8080:8080']",
                 "env": "object",
                 "workdir": "string - default /workspace",
