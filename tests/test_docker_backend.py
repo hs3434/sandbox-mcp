@@ -48,6 +48,37 @@ def test_docker_create(docker_backend, mock_client):
     assert run_kwargs["name"] == "sandbox-dev"
 
 
+def test_docker_create_uses_config_prefix(monkeypatch, tmp_path, mock_client):
+    """Custom ``container_name_prefix`` from config flows into the SDK call."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[docker]\ncontainer_name_prefix = "box-"\n')
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX", raising=False)
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
+
+    with patch("docker.from_env", return_value=mock_client):
+        backend = DockerBackend()
+        info = backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "running", f"error: {info.error!r}"
+    run_kwargs = mock_client.containers.run.call_args.kwargs
+    assert run_kwargs["name"] == "box-dev"
+
+
+def test_docker_create_env_var_overrides_config_prefix(monkeypatch, tmp_path, mock_client):
+    """Env var beats config file for prefix."""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[docker]\ncontainer_name_prefix = "box-"\n')
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX", "k8s-")
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
+    with patch("docker.from_env", return_value=mock_client):
+        backend = DockerBackend()
+        info = backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "running", f"error: {info.error!r}"
+    run_kwargs = mock_client.containers.run.call_args.kwargs
+    assert run_kwargs["name"] == "k8s-dev"
+
+
 def test_docker_create_image_not_found(docker_backend, mock_client):
     from docker.errors import ImageNotFound
 

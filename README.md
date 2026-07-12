@@ -40,7 +40,70 @@ sandbox-mcp
 # HTTP/SSE mode (standalone service)
 SANDBOX_MCP_HOST=0.0.0.0 SANDBOX_MCP_PORT=8010 sandbox-mcp-http
 # Then connect any MCP client to http://host:8010/sse
+
+# First-time: write a default config file (no-op if it already exists)
+sandbox-mcp-init-config
+# → ~/.sandbox-mcp/config.toml
 ```
+
+### Configuration
+
+sandbox-mcp reads config in this priority order (highest wins):
+
+1. **Environment variables** — `SANDBOX_MCP_*` (see below)
+2. **Config file** — `~/.sandbox-mcp/config.toml` (path overridable via `SANDBOX_MCP_CONFIG`)
+3. **Built-in defaults**
+
+Config sections:
+
+```toml
+[server]                # HTTP/SSE server
+host = "0.0.0.0"
+port = 8010
+
+[storage]               # persistent workspace directory
+work_home = "~/.sandbox-mcp/workspaces/"
+
+[audit]                 # JSON-line audit log
+log_path = ""           # "" = stderr; set to a file path to append
+
+[docker]                # container defaults
+container_name_prefix = "sandbox-"
+default_image = "python:3.12-slim"
+default_workdir = "/workspace"
+image_repo = "sandbox-mcp"
+restart_policy_name = "on-failure"
+restart_max_retry_count = 3
+
+[ssh]
+connect_timeout = 10
+socket_dir_prefix = "sandbox-mcp-ssh-"
+tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
+
+[shell]
+default_max_output = 50000
+head_size = 5120
+tail_size = 46080
+
+[files]
+max_file_size = 51200
+default_read_limit = 500
+max_read_limit = 2000
+default_search_limit = 50
+```
+
+Every value can also be overridden via env var (uppercased, dots → underscores), e.g.:
+
+```bash
+SANDBOX_MCP_SERVER_PORT=9000 sandbox-mcp-http
+SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX="box-" sandbox-mcp
+SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
+```
+
+The `work_home` directory is created automatically. When `docker_run` is called,
+a subdirectory `work_home/<machine-name>/` is created and bind-mounted to
+`/workspace` inside the container — the agent works in `/workspace` without
+ever seeing a host path.
 
 ### Register with Hermes (stdio)
 

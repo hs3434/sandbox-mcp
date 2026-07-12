@@ -5,28 +5,58 @@ newline. File-operation contents are never logged in full — only a
 short SHA-256 fingerprint — so the audit stream is safe to ship to
 remote log collectors without leaking secrets.
 
-The logger is enabled by default and writes to stderr. Hosts that want
-the audit trail to go to a file, a syslog socket, or a sidecar service
-can construct their own :class:`AuditLogger` with a different sink and
-replace :data:`DEFAULT_AUDIT_LOGGER` before launching the MCP server.
+The default sink is stderr.  Operators can redirect the audit trail to
+a file via the ``[audit] log_path`` setting in
+``~/.sandbox-mcp/config.toml`` (or the ``SANDBOX_MCP_AUDIT_LOG_PATH``
+env var).  Set ``log_path`` to an empty string to keep the default
+stderr behaviour.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sys
 import time
+from pathlib import Path
 from typing import IO, Any
+
+from sandbox_mcp.config import load as _load_config
 
 _CONTENT_KEYS = {"content"}
 _BINARY_HASH_LEN = 16
 
 
+def _open_sink(log_path: str):
+    """Return a writable text stream for audit records.
+
+    Empty / unset ``log_path`` ⇒ stderr (default).
+    Non-empty path is opened in append mode; the parent directory is
+    created on demand.
+    """
+    if not log_path:
+        return sys.stderr
+    p = Path(log_path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p.open("a", encoding="utf-8")
+
+
 class AuditLogger:
     """Emit JSON-line audit records to a writable sink (default: stderr)."""
 
-    def __init__(self, sink: IO[str] | None = None) -> None:
+    def __init__(self, sink: IO[str] | str | None = None) -> None:
+        """Construct an audit logger.
+
+        ``sink`` may be:
+        - a writable text stream (e.g. ``sys.stderr``, an open file);
+        - a string path (``""`` ⇒ stderr, otherwise append-mode file);
+        - ``None`` ⇒ read the configured ``[audit] log_path``.
+        """
+        if sink is None:
+            sink = _load_config().audit.log_path
+        if isinstance(sink, str):
+            sink = _open_sink(sink)
         self._sink = sink if sink is not None else sys.stderr
         self._closed = False
 
@@ -81,6 +111,17 @@ class AuditLogger:
 
 
 DEFAULT_AUDIT_LOGGER = AuditLogger()
+
+
+def reset_default_logger(sink: IO[str] | str | None = None) -> AuditLogger:
+    """Rebuild :data:`DEFAULT_AUDIT_LOGGER` (used at server startup to pick
+    up ``[audit] log_path`` after env or config changes).
+    """
+    global DEFAULT_AUDIT_LOGGER
+    with contextlib.suppress(Exception):
+        DEFAULT_AUDIT_LOGGER.close()
+    DEFAULT_AUDIT_LOGGER = AuditLogger(sink)
+    return DEFAULT_AUDIT_LOGGER
 
 
 def disable_audit() -> None:

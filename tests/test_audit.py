@@ -63,6 +63,35 @@ def test_record_swallows_sink_errors(sink):
     log.record(machine="dev", action="shell_exec")
 
 
+def test_path_string_sink_writes_to_file(tmp_path):
+    log_path = tmp_path / "audit.log"
+    log = AuditLogger(sink=str(log_path))
+    log.record(machine="dev", action="shell_exec", status="ok")
+    log.close()
+    text = log_path.read_text(encoding="utf-8").strip()
+    entry = json.loads(text)
+    assert entry["action"] == "shell_exec"
+
+
+def test_path_string_sink_creates_parent_dirs(tmp_path):
+    log_path = tmp_path / "nested" / "deeper" / "audit.log"
+    log = AuditLogger(sink=str(log_path))
+    log.record(machine="dev", action="shell_exec")
+    log.close()
+    assert log_path.is_file()
+
+
+def test_empty_string_sink_falls_back_to_stderr(monkeypatch):
+    """``AuditLogger(sink="")`` should write to stderr (the default)."""
+    import sys
+
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    log = AuditLogger(sink="")
+    log.record(machine="dev", action="shell_exec")
+    assert "shell_exec" in captured.getvalue()
+
+
 def test_default_logger_is_disabled_via_close(monkeypatch):
     """The module exposes a default logger; closing it silences output."""
     from sandbox_mcp import audit as audit_module

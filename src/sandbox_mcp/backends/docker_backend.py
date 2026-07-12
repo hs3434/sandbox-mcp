@@ -21,6 +21,7 @@ from pathlib import Path
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
 from sandbox_mcp.config import get_work_dir
+from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.shell_session import ShellSession
 
 
@@ -157,16 +158,17 @@ class DockerBackend(Backend):
         return self._client
 
     def _container_name(self, name: str) -> str:
-        return f"sandbox-{name}"
+        return f"{_load_config().docker.container_name_prefix}{name}"
 
     # ---- lifecycle ----
 
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
-        image = kwargs.get("image", "python:3.12-slim")
+        docker_cfg = _load_config().docker
+        image = kwargs.get("image", docker_cfg.default_image)
         volumes = kwargs.get("volumes", []) or []
         ports = kwargs.get("ports", []) or []
         env = kwargs.get("env", {}) or {}
-        workdir = kwargs.get("workdir", "/workspace")
+        workdir = kwargs.get("workdir", docker_cfg.default_workdir)
 
         container_name = self._container_name(name)
 
@@ -205,7 +207,10 @@ class DockerBackend(Backend):
                 detach=True,
                 name=container_name,
                 init=True,
-                restart_policy={"Name": "on-failure", "MaximumRetryCount": 3},
+                restart_policy={
+                    "Name": docker_cfg.restart_policy_name,
+                    "MaximumRetryCount": docker_cfg.restart_max_retry_count,
+                },
                 working_dir=workdir,
                 volumes=volume_bindings if volume_bindings else None,
                 ports=port_bindings if port_bindings else None,
@@ -284,11 +289,12 @@ class DockerBackend(Backend):
     def commit(self, name: str, image_tag: str | None = None) -> dict:
         docker = _docker_module()
         container_name = self._container_name(name)
-        tag = image_tag or f"sandbox-{name}-{int(time.time())}"
+        image_repo = _load_config().docker.image_repo
+        tag = image_tag or f"{image_repo}-{name}-{int(time.time())}"
         try:
             container = self._ensure_client().containers.get(container_name)
             repo, tag_part = ([*tag.rsplit(":", 1), ""])[:2]
-            container.commit(repository=repo or "sandbox-mcp", tag=tag_part or "latest")
+            container.commit(repository=repo or image_repo, tag=tag_part or "latest")
             return {"image_tag": tag, "status": "committed"}
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return {"error": str(e), "image_tag": tag, "status": "error"}
@@ -439,7 +445,7 @@ class DockerBackend(Backend):
             tar.addfile(info, io.BytesIO(content))
         tar_bytes = buf.getvalue()
 
-        tmp_dir = f"/tmp/.sandbox-mcp-write-{uuid.uuid4().hex[:8]}"
+        tmp_dir = f"{_load_config().docker.write_tmp_prefix}{uuid.uuid4().hex[:8]}"
         mkdir_tmp = self.exec_oneoff(name, f"mkdir -p {shlex.quote(tmp_dir)}")
         if mkdir_tmp.get("exit_code") not in (0, None):
             return {

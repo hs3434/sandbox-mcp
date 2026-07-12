@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
+from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.shell_session import ShellSession
 
 
@@ -32,7 +33,8 @@ class SSHBackend(Backend):
         if target is not None and "socket" in target:
             return target["socket"]
         # Per-target socket directory; predictable name but isolated.
-        d = tempfile.mkdtemp(prefix=f"sandbox-mcp-ssh-{name}-")
+        prefix = _load_config().ssh.socket_dir_prefix
+        d = tempfile.mkdtemp(prefix=f"{prefix}{name}-")
         return f"{d}/control"
 
     def _ssh_base_args(self, name):
@@ -40,6 +42,7 @@ class SSHBackend(Backend):
         if target is None:
             raise RuntimeError(f"Unknown SSH target: {name}")
         socket = self._socket_path(name)
+        connect_timeout = _load_config().ssh.connect_timeout
         args = [
             self._ssh,
             "-o",
@@ -47,7 +50,7 @@ class SSHBackend(Backend):
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
-            "ConnectTimeout=10",
+            f"ConnectTimeout={connect_timeout}",
         ]
         port = target.get("port", 22)
         args += ["-p", str(port)]
@@ -64,6 +67,7 @@ class SSHBackend(Backend):
         user = kwargs.get("user", "")
         port = kwargs.get("port", 22)
         key = kwargs.get("key")
+        connect_timeout = _load_config().ssh.connect_timeout
 
         cmd = [
             self._ssh,
@@ -75,7 +79,7 @@ class SSHBackend(Backend):
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
-            "ConnectTimeout=10",
+            f"ConnectTimeout={connect_timeout}",
             "-p",
             str(port),
         ]
@@ -198,11 +202,12 @@ class SSHBackend(Backend):
                     "error": mkdir.get("stderr") or "mkdir failed",
                 }
 
+        pattern = _load_config().ssh.tmpfile_pattern
         script = (
             "set -e; "
             f"t={shlex.quote(path)}; "
-            f'tmp=$(mktemp -p "${{t%/*}}" .sandbox-mcp-tmp.XXXXXX 2>/dev/null || '
-            "mktemp .sandbox-mcp-tmp.XXXXXX 2>/dev/null); "
+            f'tmp=$(mktemp -p "${{t%/*}}" {pattern} 2>/dev/null || '
+            f"mktemp {pattern} 2>/dev/null); "
             '[ -n "$tmp" ] || { echo "atomic write: mktemp failed" >&2; exit 1; }; '
             'cat > "$tmp"; '
             'mv -f "$tmp" "$t"; '

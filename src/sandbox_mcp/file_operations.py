@@ -32,14 +32,14 @@ import os
 import re
 import shlex
 
+from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.safety import check_path_safety
 
 LINE_FMT = "{n}|{line}"
-_MAX_FILE_SIZE = 50 * 1024  # 50 KB hard cap on read
-_MAX_LINE_LENGTH = 2000  # per-line truncation
-_DEFAULT_READ_LIMIT = 500
-_MAX_READ_LIMIT = 2000
-_DEFAULT_SEARCH_LIMIT = 50
+
+
+def _files_cfg():
+    return _load_config().files
 
 
 # Extensions where we have a fast in-process linter and a failed parse
@@ -287,11 +287,14 @@ class FileOperations:
 
     # ---- read ----
 
-    def read(self, path: str, machine: str, offset: int = 1, limit: int = 500) -> dict:
+    def read(self, path: str, machine: str, offset: int = 1, limit: int | None = None) -> dict:
         path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
+        cfg = _files_cfg()
         offset = max(1, int(offset))
-        limit = max(1, min(int(limit), _MAX_READ_LIMIT))
+        if limit is None:
+            limit = cfg.default_read_limit
+        limit = max(1, min(int(limit), cfg.max_read_limit))
 
         q_path = shlex.quote(path)
         # File size guard — wc -c is POSIX, works on Linux + macOS.
@@ -302,6 +305,18 @@ class FileOperations:
             file_size = int(size_result.get("output", "").strip())
         except ValueError:
             file_size = 0
+
+        if file_size > cfg.max_file_size:
+            return {
+                "status": "too_large",
+                "file_size": file_size,
+                "max_file_size": cfg.max_file_size,
+                "hint": (
+                    f"File is {file_size} bytes; exceeds the configured "
+                    f"max_file_size of {cfg.max_file_size}. "
+                    "Use the shell tool to inspect it directly."
+                ),
+            }
 
         # Images are out of scope for the text-mode read; caller should
         # download them via the shell tool.
@@ -342,10 +357,11 @@ class FileOperations:
             hint = f"(End of file - total {total_lines} lines)"
 
         lines = text.split("\n")
+        max_line_len = cfg.max_line_length
         numbered = [
             (
-                LINE_FMT.format(n=offset + i, line=line[:_MAX_LINE_LENGTH])
-                + ("... [truncated]" if len(line) > _MAX_LINE_LENGTH else "")
+                LINE_FMT.format(n=offset + i, line=line[:max_line_len])
+                + ("... [truncated]" if len(line) > max_line_len else "")
             )
             for i, line in enumerate(lines)
         ]
@@ -582,11 +598,13 @@ class FileOperations:
         search_type: str = "content",
         path: str = ".",
         file_glob: str = "",
-        limit: int = _DEFAULT_SEARCH_LIMIT,
+        limit: int | None = None,
         offset: int = 0,
         output_mode: str = "content",
         context: int = 0,
     ) -> dict:
+        if limit is None:
+            limit = _files_cfg().default_search_limit
         # Validate search_type up-front; cheaper than shipping to backend.
         if search_type not in ("content", "files"):
             return {"status": "error", "error": f"Unknown search_type: {search_type}"}

@@ -5,6 +5,10 @@ States: idle | busy | running | terminated
   busy       - send(wait=true) blocking, lock held
   running    - command executing in background (wait=false or timeout)
   terminated - bash process exited (passive close)
+
+Buffer sizes and the default output cap are configurable via
+``[shell]`` in ``~/.sandbox-mcp/config.toml`` (or the
+``SANDBOX_MCP_SHELL_*`` env vars).
 """
 
 from __future__ import annotations
@@ -17,15 +21,13 @@ import time
 import uuid
 from collections import deque
 
+from sandbox_mcp.config import load as _load_config
+
 _MARKER_RE = re.compile(r"__(START|END)_[0-9a-f]+__(?::\d+)?")
 
 
 class ShellSession:
     """A persistent shell (bash) process with drain-thread-based I/O."""
-
-    HEAD_SIZE = 5120  # 5KB head buffer
-    TAIL_SIZE = 46080  # ~45KB tail ring buffer
-    DEFAULT_MAX_OUTPUT = 50000  # 50KB default output limit
 
     def __init__(self, args=None, process=None):
         """Create a shell session.
@@ -36,6 +38,10 @@ class ShellSession:
         The *process* form is used by backends that provide their own
         process-like handle (e.g. the Docker backend's SDK-based exec).
         """
+        shell_cfg = _load_config().shell
+        self.HEAD_SIZE = shell_cfg.head_size
+        self.TAIL_SIZE = shell_cfg.tail_size
+        self.DEFAULT_MAX_OUTPUT = shell_cfg.default_max_output
         self._args = args
         self._process = process
         self._external = process is not None
@@ -144,12 +150,18 @@ class ShellSession:
         else:
             self._tail.extend(data)
 
-    def send(self, command, wait=True, timeout=30, max_output=DEFAULT_MAX_OUTPUT):
+    def send(self, command, wait=True, timeout=30, max_output=None):
         """Send a command to the shell.
 
         wait=True:  block until __END_ marker or timeout
         wait=False: block until __START_ marker (~2s), then return
+
+        ``max_output`` defaults to the configured per-session cap
+        (``[shell] default_max_output``); pass an explicit value to
+        override for one call.
         """
+        if max_output is None:
+            max_output = self.DEFAULT_MAX_OUTPUT
         with self._lock:
             if self._state in ("terminated", "closed"):
                 return {

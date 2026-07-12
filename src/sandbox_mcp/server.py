@@ -16,9 +16,11 @@ import json
 import logging
 import time
 
-from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger
+from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
+from sandbox_mcp.config import ensure_config_file
+from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.file_operations import FileOperations
 from sandbox_mcp.sandbox_env import SandboxEnv
 from sandbox_mcp.shell_registry import ShellRegistry
@@ -373,14 +375,17 @@ def main():
 def main_http():
     """Entry point: run the MCP server as an HTTP SSE service.
 
-    Listens on ``SANDBOX_MCP_HOST`` (default ``0.0.0.0``) and
-    ``SANDBOX_MCP_PORT`` (default ``8010``).  The SSE endpoint is
-    at ``/sse`` and the client message endpoint at ``/messages/``.
+    Listens on ``[server] host`` (default ``0.0.0.0``) and
+    ``[server] port`` (default ``8010``) in ``~/.sandbox-mcp/config.toml``
+    — overridable via ``SANDBOX_MCP_SERVER_HOST`` / ``SANDBOX_MCP_SERVER_PORT``.
+    The SSE endpoint is at ``/sse`` and the client message endpoint at
+    ``/messages/``.
     """
-    import os
 
-    host = os.environ.get("SANDBOX_MCP_HOST", "0.0.0.0")
-    port = int(os.environ.get("SANDBOX_MCP_PORT", "8010"))
+    server_cfg = _load_config().server
+    host = server_cfg.host
+    port = server_cfg.port
+    reset_default_logger()  # honour [audit] log_path
 
     import mcp.types as types
     import uvicorn
@@ -429,6 +434,12 @@ def main_http():
     )
 
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def main_init_config():
+    """Write a default ``~/.sandbox-mcp/config.toml`` (no-op if exists)."""
+    path = ensure_config_file()
+    print(f"sandbox-mcp config written to: {path}")
 
 
 if __name__ == "__main__":
