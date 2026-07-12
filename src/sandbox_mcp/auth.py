@@ -1,4 +1,4 @@
-"""Bearer-token authentication for the HTTP/SSE transport.
+"""Bearer-token authentication for the HTTP transport.
 
 Token source
 ------------

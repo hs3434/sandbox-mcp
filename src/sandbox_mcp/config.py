@@ -35,6 +35,11 @@ def _default_config_path() -> Path:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8010
+    # HTTP transport for the MCP server.  ``streamable-http`` is the
+    # current MCP spec direction (single ``/mcp`` endpoint, GET + POST +
+    # DELETE); ``sse`` is the legacy HTTP+SSE transport (``/sse`` +
+    # ``/messages/``) kept as a fallback for older clients.
+    transport: str = "streamable-http"
     # Path to the file containing accepted bearer tokens (one per line).
     # Overridable via the [server] table in config.toml or the
     # SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE env var.
@@ -67,6 +72,9 @@ class DockerConfig:
     restart_policy_name: str = "on-failure"
     restart_max_retry_count: int = 3
     write_tmp_prefix: str = "/tmp/.sandbox-mcp-write-"
+    # User-defined bridge network for DNS-resolvable container-to-container
+    # communication.  Created lazily on first docker_run.  Empty = no network.
+    auto_network: str = "sandbox-mcp"
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
     env_map: dict[str, tuple[str, str, Callable[[str], object]]] = {
         "server_host": ("server", "host", str),
         "server_port": ("server", "port", int),
+        "server_transport": ("server", "transport", str),
         "server_auth_tokens_file": ("server", "auth_tokens_file", str),
         "server_auto_generate_if_empty": ("server", "auto_generate_if_empty", _as_bool),
         "storage_work_home": ("storage", "work_home", str),
@@ -128,6 +137,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "docker_restart_policy_name": ("docker", "restart_policy_name", str),
         "docker_restart_max_retry_count": ("docker", "restart_max_retry_count", int),
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
+        "docker_auto_network": ("docker", "auto_network", str),
         "ssh_connect_timeout": ("ssh", "connect_timeout", int),
         "ssh_socket_dir_prefix": ("ssh", "socket_dir_prefix", str),
         "ssh_tmpfile_pattern": ("ssh", "tmpfile_pattern", str),

@@ -13,11 +13,18 @@
 #   3. Built-in defaults (which match this file)
 
 [server]
-# HTTP/SSE server bind address.  Only used by `sandbox-mcp-http`.
+# HTTP server bind address.  Only used by `sandbox-mcp-http`.
 host = "0.0.0.0"
 port = 8010
 
-# Bearer-token auth for HTTP/SSE clients.
+# HTTP transport for the MCP server.
+#   "streamable-http"  — current MCP spec. Single /mcp endpoint.
+#   "sse"             — legacy HTTP+SSE transport (/sse + /messages/).
+#                       Use only if your client doesn't yet speak the
+#                       new streamable-http transport.
+transport = "streamable-http"
+
+# Bearer-token auth for HTTP clients.
 # Path to the file with one accepted token per line (the file MUST be
 # mode 0600; sandbox-mcp refuses to read a world/group-readable file).
 # Overridable via $SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE.
@@ -48,7 +55,12 @@ default_image = "debian:stable-slim"
 default_workdir = "/workspace"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
+
 write_tmp_prefix = "/tmp/.sandbox-mcp-write-"
+
+# User-defined bridge network for DNS-resolvable container-to-container
+# communication.  Created lazily on first docker_run.  Empty = no network.
+auto_network = "sandbox-mcp"
 
 [ssh]
 connect_timeout = 10

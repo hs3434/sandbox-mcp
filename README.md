@@ -12,7 +12,7 @@ tools, adding persistent environment management that the built-in tools lack.
 ## Features
 
 - **Compact MCP surface**: 7 exposed tools, with progressive management discovery via `sandbox_env`
-- **Dual transport**: stdio (Hermes child process) or SSE/HTTP (independent service)
+- **Dual transport**: stdio (Hermes child process) or HTTP (independent service)
 - **Multi-backend**: Docker containers (SDK, works with remote daemons) + SSH remote machines
 - **Persistent machines**: Docker containers survive MCP restart; discover with `docker_ps`
 - **Shell-based execution**: dual-marker confirmation, read for long-running commands
@@ -40,10 +40,10 @@ pytest tests/ -m integration -v
 
 sandbox-mcp has two transports:
 
-- **`sandbox-mcp-http`** — standalone HTTP/SSE service.  Start it from a shell:
+- **`sandbox-mcp-http`** — standalone HTTP service.  Start it from a shell:
   ```bash
   sandbox-mcp-http
-  # Then connect any MCP client to http://127.0.0.1:8010/sse
+  # Then connect any MCP client to http://127.0.0.1:8010/mcp
   ```
 - **`sandbox-mcp`** (stdio) — launched by an MCP host as a child process.
   Don't run this from a shell directly; configure it in the host (see
@@ -56,10 +56,14 @@ sandbox-mcp has two transports:
 | `--config PATH` / `-c PATH` | both | path to a TOML config file |
 | `--host ADDR` / `-H ADDR` | `sandbox-mcp-http` | HTTP bind address |
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP port |
+| `--transport {streamable-http,sse}` | `sandbox-mcp-http` | HTTP transport (default `streamable-http`) |
 
 ```bash
-# standalone HTTP/SSE server
+# standalone HTTP server (default: streamable-http on /mcp)
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
+
+# fall back to the legacy HTTP+SSE transport if your client is older
+sandbox-mcp-http --transport sse
 
 # stdio (passed via the MCP host's config; not run from a shell)
 #   see Register with Hermes below for an example
@@ -84,9 +88,10 @@ Leaving it in place means all defaults are used.
 Config sections:
 
 ```toml
-[server]                # HTTP/SSE server
+[server]                # HTTP server
 host = "0.0.0.0"
 port = 8010
+transport = "streamable-http"   # or "sse" for the legacy HTTP+SSE transport
 
 [storage]               # persistent workspace directory
 work_home = "~/.sandbox-mcp/workspaces/"
@@ -131,7 +136,9 @@ a subdirectory `work_home/<machine-name>/` is created and bind-mounted to
 `/workspace` inside the container — the agent works in `/workspace` without
 ever seeing a host path.
 
-### Register with Hermes (stdio)
+### Register with Hermes
+
+**Stdio transport** (the `sandbox-mcp` command):
 
 Add to `~/.hermes/config.yaml`:
 
@@ -139,9 +146,7 @@ Add to `~/.hermes/config.yaml`:
 mcp_servers:
   sandbox:
     command: sandbox-mcp
-    # Optional: pass CLI flags to the server.  The same flags work as on
-    # the standalone server — sandbox-mcp reads its config from
-    # --config / $SANDBOX_MCP_CONFIG / ~/.sandbox-mcp/config.toml.
+    # Optional: pass CLI flags to the server.
     args:
       - --config
       - /etc/sandbox-mcp/prod.toml
@@ -156,6 +161,37 @@ agent:
 
 Hermes spawns `sandbox-mcp` as a child process and pipes JSON-RPC over
 its stdin/stdout.  The server has no GUI; it just waits for requests.
+
+**HTTP transport** (the `sandbox-mcp-http` command):
+
+```yaml
+mcp_servers:
+  sandbox:
+    url: "http://localhost:8010/mcp"
+    headers:
+      Authorization: "Bearer <your-token>"
+
+agent:
+  disabled_toolsets:
+    - terminal
+    - file
+    - code_execution
+```
+
+Hermes connects to the HTTP MCP endpoint (`/mcp`, the current MCP spec
+"Streamable HTTP" transport).  Useful when the MCP server runs on a
+different machine or is managed as a systemd service.
+
+If your client only speaks the older HTTP+SSE transport, start the
+server with `--transport sse` and point the client at `/sse` instead:
+
+```yaml
+mcp_servers:
+  sandbox:
+    url: "http://localhost:8010/sse"   # legacy HTTP+SSE transport
+    headers:
+      Authorization: "Bearer <your-token>"
+```
 
 ## Tools
 
@@ -183,6 +219,34 @@ its stdin/stdout.  The server has no GUI; it just waits for requests.
 
 `docker_run` is idempotent: if a container named `sandbox-<name>` already exists
 (e.g. after an MCP restart), it reattaches instead of failing.
+
+### Container networking
+
+All containers created by `docker_run` join a shared user-defined bridge
+network (`sandbox-mcp` by default).  This means containers can reach each
+other by their container name (DNS-resolvable):
+
+```python
+sandbox_env(action="docker_run", name="db", image="postgres:16")
+sandbox_env(action="docker_run", name="dev", image="debian:stable-slim")
+# Inside "dev" container: psql -h sandbox-db
+#                              ^ DNS resolves to the "db" container's IP
+
+sandbox_env(action="docker_run", name="web", image="nginx:latest")
+# Inside "dev" container: curl http://sandbox-web
+#                              ^ DNS resolves to the "web" container's IP
+```
+
+The network name is configured via `[docker] auto_network` (default
+`"sandbox-mcp"`).  Set it to an empty string to opt out:
+
+```toml
+[docker]
+auto_network = ""
+```
+
+The network is created lazily on the first `docker_run` call, so no
+startup dependency exists.
 
 ### `docker_build` Usage
 
@@ -217,7 +281,7 @@ outside its assigned `work_home/<machine>/`.
 
 ## HTTP authentication
 
-The HTTP/SSE transport (`sandbox-mcp-http`) requires a bearer token
+The HTTP transport (`sandbox-mcp-http`) requires a bearer token
 on every request.  Tokens are stored in a file, one per line:
 
 ```
@@ -248,6 +312,13 @@ When you connect an MCP client, include the token in the
 ``Authorization`` header:
 
 ```bash
+# default streamable-http transport
+curl -X POST -H "Authorization: Bearer <your-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
+     http://127.0.0.1:8010/mcp
+
+# legacy SSE transport (only if --transport sse)
 curl -N -H "Authorization: Bearer <your-token>" http://127.0.0.1:8010/sse
 ```
 
@@ -282,10 +353,10 @@ Agent (LLM)
   │
   ▼
 MCP Client (Hermes Gateway | any MCP host)
-  │  JSON-RPC over stdio │  or  │ SSE/HTTP
+  │  JSON-RPC over stdio │  or  │ HTTP (/mcp)
   ▼                              ▼
 sandbox-mcp                     sandbox-mcp-http
-  │  (stdio transport)           │  (SSE transport, port 8010)
+  │  (stdio transport)           │  (streamable-http, port 8010)
   │                              │
   └──────────┬───────────────────┘
              │

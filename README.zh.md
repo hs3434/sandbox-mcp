@@ -9,7 +9,7 @@
 ## 特性
 
 - **简洁的 MCP 接口**：只暴露 7 个工具，通过 `sandbox_env` 渐进式发现管理能力
-- **双传输**：stdio（Hermes 子进程）或 SSE/HTTP（独立服务）
+- **双传输**：stdio（Hermes 子进程）或 HTTP（独立服务）
 - **多 backend**：Docker 容器（SDK，支持远程 daemon）+ SSH 远程机器
 - **持久化机器**：Docker 容器在 MCP 重启后依然存在，可用 `docker_ps` 发现
 - **Shell 执行**：双 marker 确认机制，长时间运行的命令可用 `read` 读后续输出
@@ -37,10 +37,10 @@ pytest tests/ -m integration -v
 
 sandbox-mcp 有两种传输模式：
 
-- **`sandbox-mcp-http`** —— 独立 HTTP/SSE 服务，从 shell 启动：
+- **`sandbox-mcp-http`** —— 独立 HTTP 服务，从 shell 启动：
   ```bash
   sandbox-mcp-http
-  # 然后用任意 MCP 客户端连 http://127.0.0.1:8010/sse
+  # 然后用任意 MCP 客户端连 http://127.0.0.1:8010/mcp
   ```
 - **`sandbox-mcp`**（stdio）—— 由 MCP host 作为子进程拉起。
   不要在 shell 里直接跑这个命令，要在 host 里配置（见下面
@@ -53,10 +53,14 @@ sandbox-mcp 有两种传输模式：
 | `--config PATH` / `-c PATH` | 两者 | TOML 配置文件路径 |
 | `--host ADDR` / `-H ADDR` | `sandbox-mcp-http` | HTTP 绑定地址 |
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP 端口 |
+| `--transport {streamable-http,sse}` | `sandbox-mcp-http` | HTTP 传输方式（默认 `streamable-http`） |
 
 ```bash
-# 独立 HTTP/SSE 服务
+# 独立 HTTP 服务（默认：streamable-http，监听 /mcp）
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
+
+# 如果客户端只支持老版本，回退到 HTTP+SSE 传输
+sandbox-mcp-http --transport sse
 
 # stdio（在 MCP host 的配置里传，不从 shell 跑）
 #   下面"注册到 Hermes"小节有完整示例
@@ -79,9 +83,10 @@ sandbox-mcp 按以下优先级读配置（从高到低）：
 主要配置项：
 
 ```toml
-[server]                # HTTP/SSE 服务
+[server]                # HTTP 服务
 host = "0.0.0.0"
 port = 8010
+transport = "streamable-http"   # 或 "sse" 走老版本 HTTP+SSE 传输
 
 [storage]               # 持久化 workspace 目录
 work_home = "~/.sandbox-mcp/workspaces/"
@@ -125,7 +130,9 @@ SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
 下创建子目录并 bind-mount 到容器内的 `/workspace` —— agent 在 `/workspace`
 工作，**永远看不到宿主路径**。
 
-### 注册到 Hermes（stdio）
+### 注册到 Hermes
+
+**Stdio 传输**（`sandbox-mcp` 命令）：
 
 加到 `~/.hermes/config.yaml`：
 
@@ -133,9 +140,7 @@ SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
 mcp_servers:
   sandbox:
     command: sandbox-mcp
-    # 可选：给 server 传 CLI 参数。flags 跟独立服务一样——
-    # sandbox-mcp 从 --config / $SANDBOX_MCP_CONFIG / ~/.sandbox-mcp/config.toml
-    # 读配置。
+    # 可选：给 server 传 CLI 参数。
     args:
       - --config
       - /etc/sandbox-mcp/prod.toml
@@ -150,6 +155,36 @@ agent:
 
 Hermes 把 `sandbox-mcp` 当成子进程拉起，通过它的 stdin/stdout 走 JSON-RPC。
 server 没有 UI，只等请求。
+
+**HTTP 传输**（`sandbox-mcp-http` 命令）：
+
+```yaml
+mcp_servers:
+  sandbox:
+    url: "http://localhost:8010/mcp"
+    headers:
+      Authorization: "Bearer <你的token>"
+
+agent:
+  disabled_toolsets:
+    - terminal
+    - file
+    - code_execution
+```
+
+Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTTP" 传输）。
+适合 MCP server 跑在不同机器上，或作为 systemd 服务管理的情况。
+
+如果你的客户端只支持老版本 HTTP+SSE 传输，启动 server 时加 `--transport sse`，
+客户端连 `/sse`：
+
+```yaml
+mcp_servers:
+  sandbox:
+    url: "http://localhost:8010/sse"   # 老版本 HTTP+SSE 传输
+    headers:
+      Authorization: "Bearer <你的token>"
+```
 
 ## 工具列表
 
@@ -178,6 +213,32 @@ server 没有 UI，只等请求。
 
 `docker_run` 是幂等的：如果名为 `sandbox-<name>` 的容器已经存在
 （比如 MCP 重启后），会重新挂载而不是失败。
+
+### 容器网络
+
+所有 `docker_run` 创建的容器加入同一个 user-defined bridge 网络（默认
+`sandbox-mcp`）。这意味着容器之间可以通过容器名 DNS 互相访问：
+
+```python
+sandbox_env(action="docker_run", name="db", image="postgres:16")
+sandbox_env(action="docker_run", name="dev", image="debian:stable-slim")
+# 在 "dev" 容器里：psql -h sandbox-db
+#                              ^ DNS 解析到 "db" 容器的 IP
+
+sandbox_env(action="docker_run", name="web", image="nginx:latest")
+# 在 "dev" 容器里：curl http://sandbox-web
+#                              ^ DNS 解析到 "web" 容器的 IP
+```
+
+网络名通过 `[docker] auto_network` 配置（默认 `"sandbox-mcp"`）。
+设为空字符串可取消自动网络：
+
+```toml
+[docker]
+auto_network = ""
+```
+
+网络在首次 `docker_run` 时惰性创建，没有启动时依赖。
 
 ### `docker_build` 用法
 
@@ -210,7 +271,7 @@ sandbox_env(action="docker_build",
 
 ## HTTP 鉴权
 
-HTTP/SSE 模式（`sandbox-mcp-http`）需要 bearer token 鉴权。token 存在文件里，一行一个：
+HTTP 模式（`sandbox-mcp-http`）需要 bearer token 鉴权。token 存在文件里，一行一个：
 
 ```
 ~/.sandbox-mcp/auth_tokens           # 默认路径
@@ -238,6 +299,13 @@ SANDBOX_MCP_SERVER_AUTH_TOKENS_FILE=/run/secrets/auth_tokens sandbox-mcp-http
 MCP 客户端连接时传 `Authorization: Bearer <token>` header：
 
 ```bash
+# 默认 streamable-http 传输
+curl -X POST -H "Authorization: Bearer <你的token>" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
+     http://127.0.0.1:8010/mcp
+
+# 老版本 SSE 传输（仅当 --transport sse 时）
 curl -N -H "Authorization: Bearer <你的token>" http://127.0.0.1:8010/sse
 ```
 
@@ -270,10 +338,10 @@ Agent (LLM)
   │
   ▼
 MCP Client (Hermes Gateway | 任意 MCP host)
-  │  JSON-RPC over stdio │  或  │ SSE/HTTP
+  │  JSON-RPC over stdio │  或  │ HTTP (/mcp)
   ▼                              ▼
 sandbox-mcp                     sandbox-mcp-http
-  │  (stdio transport)           │  (SSE transport, port 8010)
+  │  (stdio transport)           │  (streamable-http, port 8010)
   │                              │
   └──────────┬───────────────────┘
              │

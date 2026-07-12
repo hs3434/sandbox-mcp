@@ -12,7 +12,7 @@ Tools exposed via MCP tools/list:
 CLI flags
 ---------
 
-Both ``sandbox-mcp`` (stdio) and ``sandbox-mcp-http`` (SSE) accept:
+Both ``sandbox-mcp`` (stdio) and ``sandbox-mcp-http`` (HTTP) accept:
 
 - ``--config PATH`` / ``-c PATH``: path to a TOML config file (defaults to
   ``~/.sandbox-mcp/config.toml``).  Overrides ``SANDBOX_MCP_CONFIG``.
@@ -67,6 +67,18 @@ def _build_arg_parser(*, prog: str, with_http: bool, description: str) -> argpar
             type=int,
             help="HTTP port. Overrides [server] port and $SANDBOX_MCP_SERVER_PORT.",
         )
+        parser.add_argument(
+            "--transport",
+            choices=["streamable-http", "sse"],
+            default=None,
+            help=(
+                "HTTP transport for the MCP server. "
+                "'streamable-http' (default) is the current MCP spec (single /mcp endpoint). "
+                "'sse' is the legacy HTTP+SSE transport (/sse + /messages/) kept as a "
+                "fallback for older clients. "
+                "Overrides [server] transport and $SANDBOX_MCP_SERVER_TRANSPORT."
+            ),
+        )
     return parser
 
 
@@ -74,7 +86,11 @@ def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
     """Translate CLI flags into SANDBOX_MCP_* env vars so the rest of the
     config pipeline (which only reads env vars + config file) sees them.
 
-    CLI wins over any pre-set env var.
+    CLI wins over any pre-set env var.  ``args.transport`` defaults to
+    ``None`` at the parser level precisely so we can tell "user didn't
+    pass --transport" from "user passed --transport with the default
+    value" — only the former should leave the env var unset so the
+    config-file value can win.
     """
     if args.config:
         os.environ["SANDBOX_MCP_CONFIG"] = args.config
@@ -82,6 +98,8 @@ def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
         os.environ["SANDBOX_MCP_SERVER_HOST"] = args.host
     if getattr(args, "port", None) is not None:
         os.environ["SANDBOX_MCP_SERVER_PORT"] = str(args.port)
+    if getattr(args, "transport", None) is not None:
+        os.environ["SANDBOX_MCP_SERVER_TRANSPORT"] = args.transport
 
 
 TOOL_DEFINITIONS = [
@@ -435,12 +453,18 @@ def main(argv: list[str] | None = None):
 
 
 def main_http(argv: list[str] | None = None):
-    """Entry point: run the MCP server as an HTTP SSE service.
+    """Entry point: run the MCP server as an HTTP service.
 
     Bind address comes from CLI ``--host`` / ``--port``, then
     ``[server]`` in the config file, then the built-in default.
-    The SSE endpoint is at ``/sse`` and the client message endpoint at
-    ``/messages/``.
+
+    The HTTP transport is selected by CLI ``--transport``, then
+    ``[server] transport``, then ``$SANDBOX_MCP_SERVER_TRANSPORT``,
+    then the built-in default (``streamable-http``).
+      * ``streamable-http`` (default) mounts the MCP server on
+        ``/mcp`` using the current Streamable HTTP spec.
+      * ``sse`` mounts the legacy HTTP+SSE transport on
+        ``/sse`` + ``/messages/``.
 
     HTTP requests are gated by ``BearerAuthMiddleware``.  Tokens are
     read from a file on disk (env > config > ``~/.sandbox-mcp/auth_tokens``).
@@ -459,7 +483,7 @@ def main_http(argv: list[str] | None = None):
     args = _build_arg_parser(
         prog="sandbox-mcp-http",
         with_http=True,
-        description="Run sandbox-mcp as a standalone HTTP/SSE MCP server.",
+        description="Run sandbox-mcp as a standalone HTTP MCP server.",
     ).parse_args(argv)
     _apply_cli_overrides_to_env(args)
 
@@ -497,23 +521,45 @@ def main_http(argv: list[str] | None = None):
             )
             sys.exit(1)
 
-    import mcp.types as types
     import uvicorn
-    from mcp.server import Server
-    from mcp.server.sse import SseServerTransport
-    from starlette.applications import Starlette
-    from starlette.routing import Route
+
+    from sandbox_mcp.config import ServerConfig
+
+    server_cfg_typed: ServerConfig = server_cfg  # narrow type for transport field
+    transport = server_cfg_typed.transport
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
-    logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
+    logger.info("Starting sandbox-mcp HTTP server on %s:%s (transport=%s)", host, port, transport)
     logger.info("Loaded %d bearer token(s) from %s", len(tokens), tokens_file)
+
+    app = _build_http_app(transport=transport, tokens=tokens)
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def _build_http_app(*, transport: str, tokens: tuple[str, ...]):
+    """Build the Starlette ASGI app for the chosen HTTP transport.
+
+    ``streamable-http`` mounts a single ``/mcp`` endpoint backed by
+    :class:`StreamableHTTPSessionManager` (current MCP spec).
+    ``sse`` mounts the legacy ``/sse`` + ``/messages/`` pair backed by
+    :class:`SseServerTransport` for older clients.
+
+    Both variants wrap the app in :class:`BearerAuthMiddleware` so the
+    auth gate is identical regardless of transport.  An unknown transport
+    raises ``ValueError`` so a typo in ``[server] transport`` fails loudly
+    at startup instead of silently falling back.
+    """
+    import mcp.types as types
+    from mcp.server import Server
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
 
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
-    sse = SseServerTransport("/messages/")
 
     @mcp_server.list_tools()
     async def handle_list_tools():
@@ -526,29 +572,59 @@ def main_http(argv: list[str] | None = None):
     async def handle_call_tool(name, arguments):
         return server.call_tool(name, arguments)
 
-    async def handle_sse(scope, receive, send):
-        async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-            await mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options(),
-            )
+    if transport == "streamable-http":
+        from contextlib import asynccontextmanager
 
-    async def handle_messages(scope, receive, send):
-        await sse.handle_post_message(scope, receive, send)
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
-    app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
-        ],
-    )
+        session_manager = StreamableHTTPSessionManager(
+            app=mcp_server,
+            json_response=False,
+            stateless=False,
+        )
+
+        @asynccontextmanager
+        async def lifespan(_app):
+            async with session_manager.run():
+                yield
+
+        async def handle_mcp(scope, receive, send):
+            await session_manager.handle_request(scope, receive, send)
+
+        app = Starlette(
+            routes=[Mount("/mcp", app=handle_mcp)],
+            lifespan=lifespan,
+        )
+    elif transport == "sse":
+        from mcp.server.sse import SseServerTransport
+
+        sse = SseServerTransport("/messages/")
+
+        async def handle_sse(scope, receive, send):
+            async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
+                await mcp_server.run(
+                    read_stream,
+                    write_stream,
+                    mcp_server.create_initialization_options(),
+                )
+
+        async def handle_messages(scope, receive, send):
+            await sse.handle_post_message(scope, receive, send)
+
+        app = Starlette(
+            routes=[
+                Route("/sse", endpoint=handle_sse),
+                Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+            ],
+        )
+    else:
+        raise ValueError(f"Unknown transport {transport!r}. Expected 'streamable-http' or 'sse'.")
+
     # Wrap with bearer-token auth.  Middleware sits OUTSIDE the routes so
-    # /sse and /messages/ are both gated.  Health checks (none defined
-    # yet) could be added with an allowlist path check.
+    # every transport endpoint is gated by the same token check.  Health
+    # checks (none defined yet) could be added with an allowlist path check.
     app.add_middleware(BearerAuthMiddleware, tokens=tokens)
-
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    return app
 
 
 class BearerAuthMiddleware:
