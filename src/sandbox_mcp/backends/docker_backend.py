@@ -317,6 +317,17 @@ class DockerBackend(Backend):
                 environment=env or None,
                 network=auto_network or None,
                 command="sleep infinity",
+                # Reconciliation labels: identify containers this
+                # backend owns so :meth:`list_managed_containers` can
+                # re-discover them after the server restarts.  The
+                # ``sandbox-mcp.managed`` flag is the authoritative
+                # marker — the prefix alone is too soft (an attacker
+                # could create a ``sandbox-foo`` container by hand and
+                # the prefix check would happily pick it up).
+                labels={
+                    "sandbox-mcp.managed": "true",
+                    "sandbox-mcp.machine": name,
+                },
             )
         except _docker_module().errors.APIError as e:
             return TargetInfo(
@@ -559,6 +570,33 @@ class DockerBackend(Backend):
             )
         result.sort(key=lambda x: x["created"], reverse=True)
         return result
+
+    def list_managed_containers(self) -> list[tuple[str, dict]]:
+        """Re-discover containers this backend owns at server startup.
+
+        Returns ``[(machine_name, container_attrs), ...]`` for every
+        container carrying the ``sandbox-mcp.managed=true`` label.
+        Used by :class:`SandboxServer`'s startup reconciliation pass
+        so in-memory state survives restarts.
+
+        The label is authoritative; the name prefix is not consulted.
+        A container with ``sandbox-foo`` as its name but no label is
+        NOT adopted — it stays an unmanaged host container.
+        """
+        docker = _docker_module()
+        try:
+            containers = self._ensure_client().containers.list(
+                all=True, filters={"label": "sandbox-mcp.managed=true"}
+            )
+        except docker.errors.APIError:
+            return []
+        out: list[tuple[str, dict]] = []
+        for c in containers:
+            machine = c.labels.get("sandbox-mcp.machine") if c.labels else None
+            if not machine:
+                continue
+            out.append((machine, c.attrs))
+        return out
 
     def list_images(self) -> list[dict]:
         """Return images sandbox-mcp manages — NOT the host's full inventory.

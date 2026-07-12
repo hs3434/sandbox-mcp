@@ -43,3 +43,37 @@ def test_sandbox_env_status_empty(server):
     data = json.loads(result[0].text)
     assert data["default_machine"] is None
     assert data["machines"] == []
+
+
+def test_server_reconciles_managed_containers_at_startup(monkeypatch):
+    """A fresh ``SandboxServer`` must adopt pre-existing labeled
+    containers on startup so state survives restart.  Without
+    reconciliation, the agent loses its view of every container it
+    created in the previous process and the namespace boundary
+    disappears until the agent re-registers each one by name.
+    """
+    from unittest.mock import MagicMock, patch
+
+    fake_container = MagicMock()
+    fake_container.labels = {
+        "sandbox-mcp.managed": "true",
+        "sandbox-mcp.machine": "dev",
+    }
+    fake_container.attrs = {
+        "Created": "2026-01-01T00:00:00Z",
+        "State": {"Status": "running"},
+    }
+
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker = mock_docker_cls.return_value
+        mock_docker.list_managed_containers.return_value = [("dev", fake_container.attrs)]
+        srv = SandboxServer()
+    # Reconciled machine is in the registry, with running status, no
+    # create() call.
+    assert srv.machines.list_machines() == ["dev"]
+    mock_docker.create.assert_not_called()
+    info = srv.machines.get_info("dev")
+    assert info.status == "running"

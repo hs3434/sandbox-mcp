@@ -51,6 +51,11 @@ def test_docker_create(docker_backend, mock_client):
     # no agent-supplied host paths leak through (security boundary).
     mounts = run_kwargs.get("volumes") or {}
     assert len(mounts) == 1, f"expected only the work_home mount, got: {mounts}"
+    # Reconciliation labels are set on every container this backend creates —
+    # this is how SandboxServer re-discovers them after restart.
+    labels = run_kwargs.get("labels") or {}
+    assert labels.get("sandbox-mcp.managed") == "true"
+    assert labels.get("sandbox-mcp.machine") == "dev"
 
 
 def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
@@ -481,6 +486,30 @@ def test_docker_create_rejects_name_with_prefix(docker_backend, mock_client):
     assert info.status == "error", f"expected rejection, got {info!r}"
     assert "prefix" in info.error.lower()
     mock_client.containers.run.assert_not_called()
+
+
+def test_list_managed_containers_filters_by_label(docker_backend, mock_client):
+    """``list_managed_containers`` queries the daemon by label, NOT by
+    name prefix.  Prefix is a soft hint; the label is the authoritative
+    marker.  An attacker who creates a ``sandbox-foo`` container by hand
+    (with no label) is invisible to reconciliation — it stays an
+    unmanaged host container.
+    """
+    managed = MagicMock()
+    managed.labels = {"sandbox-mcp.managed": "true", "sandbox-mcp.machine": "dev"}
+    managed.attrs = {"Created": "2026-01-01T00:00:00Z", "State": {"Status": "running"}}
+    unmanaged_same_prefix = MagicMock()
+    unmanaged_same_prefix.labels = {}  # no label — attacker-created
+    unmanaged_same_prefix.attrs = {"Created": "2026-01-01T00:00:00Z"}
+    mock_client.containers.list.return_value = [managed, unmanaged_same_prefix]
+
+    out = docker_backend.list_managed_containers()
+    assert out == [("dev", managed.attrs)]
+    # The label filter is what matters — name prefix is not consulted.
+    mock_client.containers.list.assert_called_once()
+    kwargs = mock_client.containers.list.call_args.kwargs
+    assert kwargs.get("filters", {}).get("label") == "sandbox-mcp.managed=true"
+    assert kwargs.get("all") is True
 
 
 # ---- auto-network ----

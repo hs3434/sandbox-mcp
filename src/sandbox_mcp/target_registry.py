@@ -13,7 +13,23 @@ from sandbox_mcp.backends.base import Backend, TargetInfo
 
 
 class TargetRegistry:
-    """Tracks named execution machines and the default machine."""
+    """Tracks named execution machines and the default machine.
+
+    The registry is populated two ways:
+
+    - ``register(name, backend, purpose)`` calls ``backend.create()`` and
+      records the freshly-created machine.  Used by the
+      ``sandbox_env`` dispatcher on agent-initiated ``docker_run``.
+    - ``adopt(name, backend, info)`` records a pre-existing machine
+      WITHOUT calling ``backend.create()``.  Used by the server's
+      startup reconciliation pass to re-discover containers that
+      survived a restart (identified by the
+      ``sandbox-mcp.managed=true`` docker label).
+
+    Adopting an already-registered name is a no-op — reconciliation
+    must not clobber a machine's in-process state with stale daemon
+    data.
+    """
 
     def __init__(self):
         self._machines: dict[str, dict] = {}
@@ -31,6 +47,26 @@ class TargetRegistry:
         if self._default is None:
             self._default = name
         return info
+
+    def adopt(self, name: str, backend: Backend, info: TargetInfo) -> None:
+        """Record ``name`` as a known machine without invoking
+        ``backend.create()``.  Idempotent: no-op if already registered.
+
+        Used by the server's startup reconciliation pass — the daemon
+        is the source of truth for what exists; the registry is just a
+        cached view that gets rebuilt at every server start.
+        """
+        if name in self._machines:
+            return
+        self._machines[name] = {
+            "backend": backend,
+            "info": info,
+            "created_at": time.time(),
+            "kwargs": {},
+            "purpose": info.purpose,
+        }
+        if self._default is None:
+            self._default = name
 
     def unregister(self, name: str) -> bool:
         if name not in self._machines:
