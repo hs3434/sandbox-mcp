@@ -55,4 +55,6 @@ python_version = "3.12"
 strict = false
 warn_unused_ignores = true
 disallow_untyped_defs = false
+check_untyped_defs = false
 ignore_missing_imports = true
+disable_error_code = ["annotation-unchecked"]

@@ -28,7 +28,7 @@ _CONTENT_KEYS = {"content"}
 _BINARY_HASH_LEN = 16
 
 
-def _open_sink(log_path: str):
+def _open_sink(log_path: str) -> IO[str]:
     """Return a writable text stream for audit records.
 
     Empty / unset ``log_path`` ⇒ stderr (default).
