@@ -250,11 +250,8 @@ startup dependency exists.
 
 ### `docker_build` Usage
 
-The agent never touches the host filesystem. `docker_build` provides two
-modes:
-
-**File mode** (recommended): agent writes the Dockerfile into the container's
-`/workspace/` via `sandbox_file_write`, then calls:
+The agent never touches the host filesystem. `docker_build` only
+accepts file mode:
 
 ```python
 sandbox_file_write(path="/workspace/Dockerfile",
@@ -266,18 +263,59 @@ sandbox_env(action="docker_build",
 # sandbox-mcp translates the container path to work_home/<machine>/ on the host
 ```
 
-**Inline mode** (for one-shot builds or no running container):
-
-```python
-sandbox_env(action="docker_build",
-            image_tag="myapp:latest",
-            dockerfile_content="FROM debian:stable-slim\nRUN apt install -y python3\n")
-# sandbox-mcp stages the content at work_home/_builds/<uuid>/Dockerfile and cleans up after
-```
-
 **Sandbox boundary**: `dockerfile` and `context_dir` must live under
 `/workspace/`. Host paths are rejected — the agent cannot reach files
 outside its assigned `work_home/<machine>/`.
+
+> **Why no inline `dockerfile_content`?** An inline Dockerfile would
+> skip the sandbox's file-write audit trail AND be fed verbatim to the
+> docker daemon, whose build steps execute with full host kernel
+> capabilities (e.g. BuildKit `--mount=type=bind,source=/,...`). The
+> agent has to commit its Dockerfile to disk via `sandbox_file_write`
+> first, which keeps every line auditable and the build context under
+> `work_home`.
+
+### `docker_run` Sandbox Boundary
+
+The agent cannot smuggle arbitrary host paths into a sandboxed
+container:
+
+- `volumes=[]` is **not accepted**. The only bind mount is the
+  auto-attached `work_home/<machine>` → `/workspace`. Attempts to pass
+  `volumes=["/:/host", "/etc:/host-etc"]` are silently dropped.
+- The agent can run any image and `docker exec` any command *inside*
+  the container, but cannot mount host paths, cannot read host
+  `/etc`, `/root`, etc. from inside.
+
+This is a deliberate **first line of defense**: the sandbox's
+file-write boundary extends into `docker_run`. **Caveats** still apply:
+the container shares the host kernel, so kernel-capability exploits
+(`unshare`, kernel CVEs) are not stopped by this. For stronger
+isolation, deploy with rootless docker or gVisor (`runsc`).
+
+### Connecting to a Remote Docker Daemon
+
+By default `sandbox-mcp` talks to the docker daemon at
+`unix:///var/run/docker.sock` (or wherever `$DOCKER_HOST` points).  To
+point at a remote daemon, set `[docker] host` in `config.toml` (env
+override: `SANDBOX_MCP_DOCKER_HOST`):
+
+```toml
+# Remote daemon over TLS (recommended for non-local daemons).
+[docker]
+host = "tcp://docker.internal:2376"
+tls_verify = true
+cert_path = "/etc/sandbox-mcp/docker-certs"
+
+# Or ride your existing SSH trust — uses paramiko, no cert needed.
+# host = "ssh://deploy@docker-prod.internal"
+
+# Or a custom socket path when bind-mounted into a container.
+# host = "unix:///var/run/docker.sock"
+```
+
+URL scheme (`unix://` / `tcp://` / `ssh://`) selects transport.  See
+[`config.example.toml`](config.example.toml) for all options.
 
 ## HTTP authentication
 

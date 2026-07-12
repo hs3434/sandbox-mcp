@@ -242,10 +242,7 @@ auto_network = ""
 
 ### `docker_build` 用法
 
-agent 永远不接触宿主文件系统。`docker_build` 提供两种模式：
-
-**文件模式**（推荐）：agent 先用 `sandbox_file_write` 把 Dockerfile 写到容器内的
-`/workspace/`，然后调用：
+agent 永远不接触宿主文件系统。`docker_build` 只接受文件模式：
 
 ```python
 sandbox_file_write(path="/workspace/Dockerfile",
@@ -257,17 +254,51 @@ sandbox_env(action="docker_build",
 # sandbox-mcp 自动把容器路径翻译成宿主 work_home/<machine>/ 下的路径
 ```
 
-**内联模式**（适合快速构建 / 还没有容器）：
-
-```python
-sandbox_env(action="docker_build",
-            image_tag="myapp:latest",
-            dockerfile_content="FROM debian:stable-slim\nRUN apt install -y python3\n")
-# sandbox-mcp 把内容写到 work_home/_builds/<uuid>/Dockerfile，build 完清理
-```
-
 **沙箱边界保护**：`dockerfile` 和 `context_dir` 必须在 `/workspace/` 下，
 宿主路径会被拒绝 —— 防止 agent 读到 `work_home` 之外的文件。
+
+> **为什么没有内联 `dockerfile_content`?** 内联模式会跳过 sandbox
+> 的 file-write 审计链,而且 Dockerfile 直接喂给 docker daemon,build
+> 步骤以宿主内核全能力执行(BuildKit `--mount=type=bind,source=/,...`)。
+> 强制要求 agent 先用 `sandbox_file_write` 把 Dockerfile 落到磁盘,
+> 保证每行可审计、build context 留在 `work_home` 内。
+
+### `docker_run` 沙箱边界
+
+agent 无法把宿主路径走私进容器:
+
+- **`volumes=[]` 不接受**。唯一挂载是自动绑定的 `work_home/<machine>` → `/workspace`。
+  `volumes=["/:/host", "/etc:/host-etc"]` 会被静默丢弃。
+- agent 可以在容器里跑任何镜像、`docker exec` 任何命令,但**不能**挂载宿主路径、
+  不能从容器内读宿主的 `/etc`、`/root` 等。
+
+这是 sandbox 文件写入边界向 `docker_run` 的延伸 —— **第一道防线**。
+容器与宿主共享内核,内核能力逃逸(`unshare`、内核 CVE)仍需 rootless
+docker 或 gVisor (`runsc`) 等更强的隔离手段来堵。
+
+### 连接远程 Docker Daemon
+
+默认 `sandbox-mcp` 跟本地 docker daemon 通信
+(`unix:///var/run/docker.sock`,或 `$DOCKER_HOST` 指向的位置)。
+要指向远程 daemon,在 `config.toml` 设 `[docker] host`(环境变量
+`SANDBOX_MCP_DOCKER_HOST` 覆盖):
+
+```toml
+# 远程 daemon,走 TLS(推荐用于非本地 daemon)
+[docker]
+host = "tcp://docker.internal:2376"
+tls_verify = true
+cert_path = "/etc/sandbox-mcp/docker-certs"
+
+# 或走 SSH 信任(用 paramiko,无需证书)
+# host = "ssh://deploy@docker-prod.internal"
+
+# 容器内挂载的 socket 路径不同时
+# host = "unix:///var/run/docker.sock"
+```
+
+URL 协议头(`unix://` / `tcp://` / `ssh://`)决定传输方式。
+完整选项见 [`config.example.toml`](config.example.toml)。
 
 ## HTTP 鉴权
 

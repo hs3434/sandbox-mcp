@@ -62,6 +62,23 @@ write_tmp_prefix = "/tmp/.sandbox-mcp-write-"
 # communication.  Created lazily on first docker_run.  Empty = no network.
 auto_network = "sandbox-mcp"
 
+# Docker daemon connection.  Leave ``host`` empty (the default) to fall
+# back to the standard docker SDK env vars (``$DOCKER_HOST``,
+# ``$DOCKER_TLS_VERIFY``, ``$DOCKER_CERT_PATH``) and the docker CLI
+# context (``~/.docker/config.json``).  Set ``host`` to point at a
+# specific daemon — useful when running sandbox-mcp inside a container
+# with the host socket bind-mounted at a non-default path, or when
+# talking to a remote docker daemon.  The URL scheme selects transport:
+#   ""              → from_env() default (usually unix:///var/run/docker.sock)
+#   "unix:///..."   → local socket (when bind-mounted somewhere unusual)
+#   "tcp://host:N"  → unencrypted TCP (do NOT expose publicly)
+#   "tcp://host:N"  + tls_verify=true → TLS (recommended for remote daemons)
+#   "ssh://user@host" → SSH transport (uses your ssh key / config)
+# Env vars SANDBOX_MCP_DOCKER_HOST / _TLS_VERIFY / _CERT_PATH override.
+host = ""
+tls_verify = false
+cert_path = ""
+
 [ssh]
 connect_timeout = 10
 socket_dir_prefix = "sandbox-mcp-ssh-"

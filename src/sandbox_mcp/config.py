@@ -75,6 +75,16 @@ class DockerConfig:
     # User-defined bridge network for DNS-resolvable container-to-container
     # communication.  Created lazily on first docker_run.  Empty = no network.
     auto_network: str = "sandbox-mcp"
+    # Docker daemon connection.  Empty ``host`` falls back to ``from_env()``,
+    # which reads ``$DOCKER_HOST`` / ``$DOCKER_TLS_VERIFY`` / ``$DOCKER_CERT_PATH``
+    # and the docker CLI context.  Setting ``host`` here is equivalent to
+    # exporting ``DOCKER_HOST`` for this process — useful when running
+    # sandbox-mcp inside a container with the host socket bind-mounted at
+    # a non-default path, or when pointing at a remote docker daemon
+    # (TCP / TCP+TLS / SSH transport — selected by the ``host`` URL scheme).
+    host: str = ""
+    tls_verify: bool = False
+    cert_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,6 +148,9 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "docker_restart_max_retry_count": ("docker", "restart_max_retry_count", int),
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
         "docker_auto_network": ("docker", "auto_network", str),
+        "docker_host": ("docker", "host", str),
+        "docker_tls_verify": ("docker", "tls_verify", _as_bool),
+        "docker_cert_path": ("docker", "cert_path", str),
         "ssh_connect_timeout": ("ssh", "connect_timeout", int),
         "ssh_socket_dir_prefix": ("ssh", "socket_dir_prefix", str),
         "ssh_tmpfile_pattern": ("ssh", "tmpfile_pattern", str),

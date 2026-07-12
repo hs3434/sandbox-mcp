@@ -188,8 +188,30 @@ class DockerBackend(Backend):
         self._started_at: dict[str, float] = {}
 
     def _ensure_client(self):
+        """Return a cached DockerClient, building one on first use.
+
+        Connection source, in priority order:
+          1. ``[docker] host`` / ``tls_verify`` / ``cert_path`` in config
+             (overridable via ``$DOCKER_HOST`` etc. via ``_apply_env_overrides``).
+          2. The standard docker SDK env vars (``from_env()``), including
+             ``~/.docker/config.json`` contexts.
+          3. The SDK's default: ``unix:///var/run/docker.sock``.
+
+        Set ``[docker] host = "tcp://host:2376"`` (with ``tls_verify=true``
+        and ``cert_path=...``) for a remote TLS-protected daemon, or
+        ``ssh://user@host`` to ride an existing SSH trust path.
+        """
         if self._client is None:
-            self._client = _docker_module().from_env()
+            docker = _docker_module()
+            docker_cfg = _load_config().docker
+            if docker_cfg.host:
+                self._client = docker.DockerClient(
+                    base_url=docker_cfg.host,
+                    tls=docker_cfg.tls_verify or None,
+                    cert=docker_cfg.cert_path or None,
+                )
+            else:
+                self._client = docker.from_env()
         return self._client
 
     def _container_name(self, name: str) -> str:
@@ -217,7 +239,13 @@ class DockerBackend(Backend):
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
         image = kwargs.get("image", docker_cfg.default_image)
-        volumes = kwargs.get("volumes", []) or []
+        # Note: agent-supplied ``volumes`` mounts are intentionally NOT
+        # accepted.  The only bind mount is the auto-attached work_home
+        # below — agents that need additional paths must ``docker exec``
+        # into the container or extend the sandbox.  This keeps the
+        # sandbox's host-filesystem boundary intact: the agent cannot
+        # smuggle arbitrary host directories (e.g. ``/etc``, ``/root``)
+        # into a sandboxed container.
         ports = kwargs.get("ports", []) or []
         env = kwargs.get("env", {}) or {}
         workdir = kwargs.get("workdir", docker_cfg.default_workdir)
@@ -233,8 +261,6 @@ class DockerBackend(Backend):
         # it to /workspace inside the container.  The agent never sees the
         # host path — it just works in /workspace.
         machine_dir = get_work_dir(name)
-        volumes = list(volumes)  # copy so we don't mutate the caller's list
-        volumes.append(f"{machine_dir}:/workspace")
         port_bindings: dict = {}
         for p in ports:
             host_part, _, container_part = p.partition(":")
@@ -252,11 +278,7 @@ class DockerBackend(Backend):
                 except ValueError:
                     port_bindings[cp] = None
 
-        volume_bindings: dict = {}
-        for v in volumes:
-            if ":" in v:
-                host_v, container_v = v.split(":", 1)
-                volume_bindings[host_v] = {"bind": container_v, "mode": "rw"}
+        volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
 
         try:
             self._ensure_client().containers.run(
@@ -378,33 +400,43 @@ class DockerBackend(Backend):
         context_dir: str = "/workspace",
         dockerfile_content: str | None = None,
     ) -> dict:
-        """Build a Docker image, sandbox-style.
-
-        Two modes:
-
-        - **Inline** (``dockerfile_content`` provided): the Dockerfile
-          is written to a sandbox-mcp-managed temp dir and built from
-          there.  No running container required.
-        - **File** (default): the agent has already written the
-          Dockerfile (and any other context files) into a container's
-          ``/workspace/`` via :func:`sandbox_file_write`.  The bind
-          mount surfaces them on the host at
-          ``work_home/<machine>/``.  This method translates the
-          container path back to the host path and runs the build.
+        """Build a Docker image from a Dockerfile the agent has already
+        written into a sandboxed container's ``/workspace/`` (via
+        :func:`sandbox_file_write`).  The bind mount surfaces those files
+        on the host at ``work_home/<machine>/``; this method translates
+        the container paths back to host paths and runs ``docker build``.
 
         ``dockerfile`` and ``context_dir`` must both be under
         ``/workspace/`` — host paths are not accepted (sandbox boundary).
+
+        ``dockerfile_content`` is intentionally NOT accepted.  Inline
+        mode used to stage the Dockerfile under ``work_home/_builds/``
+        and feed it directly to ``docker build`` — bypassing the
+        sandbox's file-write audit trail AND dodging the work_home
+        visibility check.  A malicious inline Dockerfile
+        (``RUN --mount=type=bind,source=/,...``) executes in a
+        daemon-orchestrated container with full host kernel
+        capabilities, so inline mode is a host-RCE vector.  Use file
+        mode instead.
         """
         docker = _docker_module()
 
-        # Inline mode — no container context needed.
+        # Inline mode removed for security — see docstring.
         if dockerfile_content is not None:
-            return self._build_inline(image_tag, dockerfile_content)
+            return {
+                "error": (
+                    "dockerfile_content is not supported: write the Dockerfile "
+                    "via sandbox_file_write into /workspace/Dockerfile first, "
+                    "then call docker_build without dockerfile_content."
+                ),
+                "image_tag": image_tag,
+                "status": "error",
+            }
 
         # File mode — translate container paths to host paths.
         if machine is None:
             return {
-                "error": "machine is required when dockerfile_content is not given",
+                "error": "machine is required (file mode only)",
                 "image_tag": image_tag,
                 "status": "error",
             }
@@ -439,33 +471,6 @@ class DockerBackend(Backend):
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
-
-    def _build_inline(self, image_tag: str, dockerfile_content: str) -> dict:
-        """Write ``dockerfile_content`` to a temp dir and build from it."""
-        import tempfile
-        from contextlib import suppress
-
-        docker = _docker_module()
-        builds_root = get_work_home() / "_builds"
-        builds_root.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix="inline-", dir=builds_root))
-        try:
-            (tmp / "Dockerfile").write_text(dockerfile_content, encoding="utf-8")
-            try:
-                self._ensure_client().images.build(
-                    path=str(tmp),
-                    dockerfile="Dockerfile",
-                    tag=image_tag,
-                    rm=True,
-                )
-                return {"image_tag": image_tag, "status": "built"}
-            except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
-                return {"error": str(e), "image_tag": image_tag, "status": "error"}
-        finally:
-            with suppress(OSError):
-                import shutil
-
-                shutil.rmtree(tmp)
 
     def suggest_paths(self, name: str, missing_path: str) -> list:
         dirname = str(Path(missing_path).parent)

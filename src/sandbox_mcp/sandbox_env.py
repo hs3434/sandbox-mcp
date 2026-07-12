@@ -120,20 +120,18 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_build",
             "description": (
-                "Build a Docker image. Two forms: (1) file mode — "
-                "provide machine (default dockerfile=/workspace/Dockerfile, "
-                "context_dir=/workspace); sandbox-mcp maps those container "
-                "paths to work_home/<machine>/ on the host. (2) inline mode "
-                "— provide dockerfile_content; the Dockerfile is staged in "
-                "work_home/_builds/<uuid>/ and built from there. Host paths "
-                "are never accepted."
+                "Build a Docker image from a Dockerfile already written "
+                "into a sandboxed container's /workspace/ via "
+                "sandbox_file_write.  Provide machine (default "
+                "dockerfile=/workspace/Dockerfile, context_dir=/workspace); "
+                "sandbox-mcp maps those container paths to work_home/<machine>/ "
+                "on the host.  Inline dockerfile_content is not supported "
+                "(see docker_backend.build docstring for rationale)."
             ),
-            "required": {"image_tag": "string"},
+            "required": {"image_tag": "string", "machine": "string"},
             "optional": {
-                "machine": "string — required for file mode",
                 "dockerfile": "string — default /workspace/Dockerfile",
                 "context_dir": "string — default /workspace",
-                "dockerfile_content": "string — enables inline mode (skips container)",
             },
             "returns": {"image_tag": "string", "status": "built"},
         },
@@ -326,7 +324,6 @@ class SandboxEnv:
             self._docker,
             purpose=params.get("purpose", ""),
             image=params["image"],
-            volumes=params.get("volumes", []),
             ports=params.get("ports", []),
             env=params.get("env", {}),
             workdir=params.get("workdir", "/workspace"),
@@ -334,38 +331,30 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "docker"}
 
     def _op_docker_build(self, params):
-        """Build a Docker image. Two forms:
+        """Build a Docker image from a Dockerfile the agent has already
+        written into a sandboxed container's ``/workspace/`` via
+        :func:`sandbox_file_write`.
 
-        - **File mode** (default): provide ``machine`` (and optionally
-          ``dockerfile``, ``context_dir``).  The agent writes files into
-          the container's ``/workspace/`` via ``sandbox_file_write``;
-          sandbox-mcp translates to host paths under
-          ``work_home/<machine>/`` and runs ``docker build``.
-        - **Inline mode**: provide ``dockerfile_content``.  The
-          Dockerfile is staged in ``work_home/_builds/<uuid>/`` and
-          built from there.  No running container required.
-
-        ``dockerfile`` and ``context_dir`` (when used) must be under
-        ``/workspace/``; host paths are rejected at the sandbox boundary.
+        ``dockerfile`` and ``context_dir`` must be under ``/workspace/``;
+        host paths are rejected at the sandbox boundary.  Inline mode
+        (``dockerfile_content``) is not supported — see the backend
+        docstring for the security rationale.
         """
         err = self._require(params, "image_tag")
         if err is not None:
             return {"error": err}
-        inline = params.get("dockerfile_content")
         machine = params.get("machine")
-        if inline is None:
-            if not machine:
-                return {"error": "machine is required when dockerfile_content is not given"}
-            try:
-                self._machines.resolve_machine(machine)
-            except ValueError as e:
-                return {"error": str(e)}
+        if not machine:
+            return {"error": "machine is required"}
+        try:
+            self._machines.resolve_machine(machine)
+        except ValueError as e:
+            return {"error": str(e)}
         return self._docker.build(
             params["image_tag"],
             machine=machine,
             dockerfile=params.get("dockerfile", "/workspace/Dockerfile"),
             context_dir=params.get("context_dir", "/workspace"),
-            dockerfile_content=inline,
         )
 
     def _op_docker_commit(self, params):

@@ -1,6 +1,5 @@
 import socket
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,7 +37,6 @@ def test_docker_create(docker_backend, mock_client):
         name="dev",
         purpose="test",
         image="python:3.12",
-        volumes=["/host:/container"],
         ports=["8080:8080"],
     )
     assert info.name == "dev"
@@ -49,6 +47,29 @@ def test_docker_create(docker_backend, mock_client):
     assert run_args.args[0] == "python:3.12"
     run_kwargs = run_args.kwargs
     assert run_kwargs["name"] == "sandbox-dev"
+    # Volume mounts: only the auto-bound work_home mount is allowed;
+    # no agent-supplied host paths leak through (security boundary).
+    mounts = run_kwargs.get("volumes") or {}
+    assert len(mounts) == 1, f"expected only the work_home mount, got: {mounts}"
+
+
+def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
+    """Agent cannot smuggle arbitrary host paths into the container via
+    a ``volumes`` kwarg.  The only bind mount is the auto-attached
+    work_home; agent-supplied mounts are silently dropped.
+    """
+    docker_backend.create(
+        name="dev",
+        purpose="test",
+        image="python:3.12",
+        volumes=["/etc:/host-etc", "/root:/host-root"],  # attacker attempt
+    )
+    mounts = mock_client.containers.run.call_args.kwargs.get("volumes") or {}
+    # Only one mount allowed: the work_home for "dev".
+    assert len(mounts) == 1, f"agent-supplied mounts leaked: {mounts}"
+    # The single mount must end with the work_home dir for "dev", not /etc or /root.
+    host_path = next(iter(mounts))
+    assert str(host_path).endswith("/dev"), f"unexpected mount host path: {host_path}"
 
 
 def test_docker_create_uses_config_prefix(monkeypatch, tmp_path, mock_client):
@@ -65,6 +86,70 @@ def test_docker_create_uses_config_prefix(monkeypatch, tmp_path, mock_client):
     assert info.status == "running", f"error: {info.error!r}"
     run_kwargs = mock_client.containers.run.call_args.kwargs
     assert run_kwargs["name"] == "box-dev"
+
+
+def test_ensure_client_uses_config_host_when_set(monkeypatch, tmp_path, mock_client):
+    """[docker] host in config.toml replaces the $DOCKER_HOST / unix-socket default.
+
+    Useful when sandbox-mcp runs in a container with the host socket
+    bind-mounted at a non-default path, or when pointing at a remote
+    docker daemon (TCP / TLS / ssh transport).
+    """
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[docker]\nhost = "tcp://10.0.5.20:2376"\n')
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_HOST", raising=False)
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
+
+    with (
+        patch("docker.from_env") as mock_from_env,
+        patch("docker.DockerClient", return_value=mock_client) as mock_explicit,
+    ):
+        backend = DockerBackend()
+        client = backend._ensure_client()
+    assert client is mock_client
+    # Explicit DockerClient(base_url=..., tls=..., cert=...) was used;
+    # from_env() was NOT consulted.
+    mock_explicit.assert_called_once_with(base_url="tcp://10.0.5.20:2376", tls=None, cert=None)
+    mock_from_env.assert_not_called()
+
+
+def test_ensure_client_uses_config_host_with_tls(monkeypatch, tmp_path, mock_client):
+    """tls_verify=true + cert_path flow into DockerClient(tls=..., cert=...)."""
+    cfg = tmp_path / "config.toml"
+    certs = tmp_path / "certs"
+    certs.mkdir()
+    cfg.write_text(
+        f'[docker]\nhost = "tcp://docker.example:2376"\ntls_verify = true\ncert_path = "{certs}"\n'
+    )
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_TLS_VERIFY", raising=False)
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_CERT_PATH", raising=False)
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
+
+    with patch("docker.DockerClient", return_value=mock_client) as mock_explicit:
+        backend = DockerBackend()
+        backend._ensure_client()
+    mock_explicit.assert_called_once_with(
+        base_url="tcp://docker.example:2376", tls=True, cert=str(certs)
+    )
+
+
+def test_ensure_client_falls_back_to_from_env_when_host_empty(monkeypatch, tmp_path, mock_client):
+    """Empty ``[docker] host`` (the default) delegates to ``from_env()``."""
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(tmp_path / "no-config.toml"))
+    monkeypatch.delenv("SANDBOX_MCP_DOCKER_HOST", raising=False)
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
+
+    with (
+        patch("docker.from_env", return_value=mock_client) as mock_from_env,
+        patch("docker.DockerClient") as mock_explicit,
+    ):
+        backend = DockerBackend()
+        backend._ensure_client()
+    mock_from_env.assert_called_once()
+    mock_explicit.assert_not_called()
 
 
 def test_docker_create_env_var_overrides_config_prefix(monkeypatch, tmp_path, mock_client):
@@ -164,37 +249,26 @@ def test_docker_build_default_paths(docker_backend, tmp_path, monkeypatch):
     assert mock_build.call_args.kwargs["path"] == str(machine_dir.resolve())
 
 
-def test_docker_build_inline_mode(docker_backend, tmp_path, monkeypatch):
-    """dockerfile_content stages to work_home/_builds/<uuid>/ and builds."""
+def test_docker_build_rejects_inline_dockerfile_content(docker_backend, tmp_path, monkeypatch):
+    """Agent cannot supply a Dockerfile out-of-band via ``dockerfile_content``.
+
+    Inline mode used to stage the Dockerfile under ``work_home/_builds/``
+    and feed it directly to ``docker build`` — bypassing the sandbox's
+    file-write audit trail AND dodging the work_home visibility check.
+    A malicious inline Dockerfile (``RUN --mount=type=bind,source=/,...``)
+    executes in a daemon-orchestrated container with full host kernel
+    capabilities, so inline mode is a host-RCE vector.
+
+    File mode (the only remaining path) requires the agent to have
+    written the Dockerfile via ``sandbox_file_write`` into
+    ``/workspace/Dockerfile``, which is itself bound from work_home.
+    """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
-    captured = {}
-
-    def fake_build(path, dockerfile, tag, rm):
-        captured["path"] = path
-        captured["dockerfile"] = dockerfile
-        # Verify Dockerfile was written with our content.
-        assert (Path(path) / "Dockerfile").read_text(encoding="utf-8") == "FROM scratch\n"
-        return (MagicMock(), [])
-
-    with patch.object(docker_backend._ensure_client().images, "build", side_effect=fake_build):
-        result = docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
-    assert result["status"] == "built"
-    assert captured["dockerfile"] == "Dockerfile"
-    # Inline mode does not need a machine — no machine arg was given.
-    assert result["status"] == "built"
-
-
-def test_docker_build_inline_mode_cleans_tmpdir(docker_backend, tmp_path, monkeypatch):
-    """After inline build, the temp dir under work_home/_builds is removed."""
-    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
-    with patch.object(
-        docker_backend._ensure_client().images, "build", return_value=(MagicMock(), [])
-    ):
-        docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
-    # Only the _builds/ root should remain; the per-build subdir should be gone.
-    builds_root = tmp_path / "_builds"
-    if builds_root.exists():
-        assert list(builds_root.iterdir()) == []
+    result = docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
+    assert result["status"] == "error", f"inline mode should be rejected, got {result!r}"
+    assert "dockerfile_content" in result["error"].lower()
+    # The build SDK must not have been called.
+    docker_backend._ensure_client().images.build.assert_not_called()
 
 
 def test_docker_build_file_mode_requires_machine(docker_backend):
