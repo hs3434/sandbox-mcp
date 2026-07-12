@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shlex
 import shutil
 import subprocess
@@ -36,6 +37,10 @@ class SSHBackend(Backend):
         prefix = _load_config().ssh.socket_dir_prefix
         d = tempfile.mkdtemp(prefix=f"{prefix}{name}-")
         return f"{d}/control"
+
+    def _socket_dir(self, name) -> str:
+        """Return the parent dir of the control socket, for cleanup on remove()."""
+        return os.path.dirname(self._socket_path(name))
 
     def _ssh_base_args(self, name):
         target = self._targets.get(name)
@@ -100,6 +105,7 @@ class SSHBackend(Backend):
             "port": port,
             "key": key,
             "socket": self._socket_path(name),
+            "socket_dir": self._socket_dir(name),
             "purpose": purpose,
             "started_at": time.time(),
         }
@@ -140,9 +146,17 @@ class SSHBackend(Backend):
 
     def remove(self, name):
         if name in self._targets:
+            # Clean up the per-target control-socket directory created by
+            # ``tempfile.mkdtemp`` in ``_socket_path``.  Without this, a
+            # long-running server leaks one dir + control socket per
+            # SSH target it creates.
+            socket_dir = self._targets[name].get("socket_dir")
             with contextlib.suppress(Exception):
                 self.stop(name)
             self._targets.pop(name, None)
+            if socket_dir:
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(socket_dir, ignore_errors=True)
         return {"target": name, "status": "removed"}
 
     def get_info(self, name):

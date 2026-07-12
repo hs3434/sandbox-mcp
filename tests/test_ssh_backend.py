@@ -46,6 +46,29 @@ def test_ssh_remove_unregisters(ssh_backend):
         assert "remote" not in ssh_backend._targets
 
 
+def test_ssh_create_allocates_socket_dir_and_remove_reaps_it(ssh_backend, tmp_path):
+    """``_socket_path`` uses ``tempfile.mkdtemp`` to host the SSH control
+    socket; ``remove()`` must ``shutil.rmtree`` that dir, otherwise a
+    long-running server leaks one directory per SSH target.
+    """
+    with patch("sandbox_mcp.backends.ssh_backend.tempfile.mkdtemp") as mock_mkdtemp:
+        mock_mkdtemp.return_value = str(tmp_path / "sandbox-mcp-ssh-remote-abc")
+        (tmp_path / "sandbox-mcp-ssh-remote-abc").mkdir()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            ssh_backend.create(
+                name="remote",
+                purpose="remote",
+                host="192.168.1.100",
+                user="ubuntu",
+            )
+            assert (tmp_path / "sandbox-mcp-ssh-remote-abc").is_dir()
+            ssh_backend.remove("remote")
+        assert not (tmp_path / "sandbox-mcp-ssh-remote-abc").exists(), (
+            "remove() must rmtree the socket dir created by mkdtemp"
+        )
+
+
 def test_ssh_open_shell(ssh_backend):
     ssh_backend._targets["remote"] = {
         "host": "192.168.1.100",
