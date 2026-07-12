@@ -186,12 +186,6 @@ class DockerBackend(Backend):
     def __init__(self):
         self._client = None  # lazy init
         self._started_at: dict[str, float] = {}
-        # Tracks images the agent is allowed to see via ``list_images()``:
-        # images in use by sandbox-mcp containers + images built via
-        # ``docker_build``.  Anything else on the host is invisible to
-        # the agent (no internal-company image fingerprinting).
-        self._managed_images: set[str] = set()  # by short_id
-        self._built_images: set[str] = set()  # by tag, e.g. "myapp:v1"
 
     def _ensure_client(self):
         """Return a cached DockerClient, building one on first use.
@@ -220,9 +214,6 @@ class DockerBackend(Backend):
                 self._client = docker.from_env()
         return self._client
 
-    def _container_name(self, name: str) -> str:
-        return f"{_load_config().docker.container_name_prefix}{name}"
-
     # ---- lifecycle ----
 
     def ensure_network(self, name: str) -> None:
@@ -244,21 +235,6 @@ class DockerBackend(Backend):
 
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
-        # Reject names that already include the prefix: ``docker_run(name="sandbox-foo")``
-        # would create ``sandbox-sandbox-foo`` and confuse namespace bookkeeping.
-        # The prefix belongs to the tool, not the agent.
-        if name.startswith(docker_cfg.container_name_prefix):
-            return TargetInfo(
-                name=name,
-                backend="docker",
-                status="error",
-                purpose=purpose,
-                error=(
-                    f"name must not start with the configured prefix "
-                    f"{docker_cfg.container_name_prefix!r}; that's reserved for "
-                    f"sandbox-mcp's own naming."
-                ),
-            )
         image = kwargs.get("image", docker_cfg.default_image)
         # Note: agent-supplied ``volumes`` mounts are intentionally NOT
         # accepted.  The only bind mount is the auto-attached work_home
@@ -271,7 +247,10 @@ class DockerBackend(Backend):
         env = kwargs.get("env", {}) or {}
         workdir = kwargs.get("workdir", docker_cfg.default_workdir)
 
-        container_name = self._container_name(name)
+        # Container names are the bare machine name.  Namespace is
+        # enforced by the ``sandbox-mcp.managed=true`` docker label,
+        # set on every container this backend creates (see below).
+        container_name = name
 
         # Ensure shared network for DNS-resolvable container names.
         auto_network = docker_cfg.auto_network
@@ -346,13 +325,6 @@ class DockerBackend(Backend):
                 error=f"Image {image} not found",
             )
 
-        # Track the image's short_id so ``list_images()`` can surface it
-        # later.  Other images on the host remain invisible to the agent.
-        # Not fatal if the lookup fails (image already gone, by-digest,
-        # network blip) — just means it won't appear in ``docker_images``.
-        with contextlib.suppress(Exception):
-            self._managed_images.add(self._ensure_client().images.get(image).short_id)
-
         self._started_at[name] = time.time()
         # ``created`` is filled in lazily by ``get_info`` (it queries the
         # daemon for accurate timestamps).  Mark the machine as running
@@ -367,7 +339,7 @@ class DockerBackend(Backend):
 
     def start(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             container.start()
@@ -378,7 +350,7 @@ class DockerBackend(Backend):
 
     def stop(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             container.stop(timeout=10)
@@ -388,7 +360,7 @@ class DockerBackend(Backend):
 
     def remove(self, name: str) -> dict:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             container.remove(force=True)
@@ -399,7 +371,7 @@ class DockerBackend(Backend):
 
     def get_info(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             status = container.attrs.get("State", {}).get("Status", "unknown")
@@ -429,7 +401,7 @@ class DockerBackend(Backend):
         for choosing a tag that won't collide with other machines.
         """
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             repo, tag_part = ([*image_tag.rsplit(":", 1), ""])[:2]
@@ -523,9 +495,6 @@ class DockerBackend(Backend):
                 tag=image_tag,
                 rm=True,
             )
-            # Track so list_images() can surface it; otherwise the agent
-            # wouldn't see images it just built (would only see base images).
-            self._built_images.add(image_tag)
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
@@ -599,20 +568,12 @@ class DockerBackend(Backend):
         return out
 
     def list_images(self) -> list[dict]:
-        """Return images sandbox-mcp manages — NOT the host's full inventory.
+        """Return all images on the daemon.
 
-        Visibility is filtered to:
-
-        - images **in use** by a container this backend created
-          (tracked via ``_managed_images`` short_ids, populated in
-          :meth:`create`); and
-        - images **built** via :meth:`build` (tracked via
-          ``_built_images`` tags).
-
-        Anything else on the host — private internal images, base
-        images the agent hasn't pulled yet, unrelated images — stays
-        invisible.  The agent has no business fingerprinting the host's
-        image library.
+        ``docker_images`` is read-only — an over-broad list leaks
+        information but cannot affect production.  Stop/remove/exec
+        are the production-impacting operations and they are protected
+        by the registry + label gates.
         """
         docker = _docker_module()
         try:
@@ -622,14 +583,8 @@ class DockerBackend(Backend):
         result = []
         for img in images:
             short_id = img.short_id
-            tags = img.tags or []
-            visible = short_id in self._managed_images or any(t in self._built_images for t in tags)
-            if not visible:
-                continue
-            # Surface the image under its tags if it has any, otherwise
-            # under its short_id (pulled-by-digest images).
-            display_tags = tags if tags else [f"<none>:{short_id}"]
-            for tag in display_tags:
+            tags = img.tags if img.tags else [f"<none>:{short_id}"]
+            for tag in tags:
                 result.append(
                     {
                         "tag": tag,
@@ -644,7 +599,7 @@ class DockerBackend(Backend):
 
     def open_shell(self, name: str) -> ShellSession:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
         except docker.errors.NotFound as e:
@@ -654,7 +609,7 @@ class DockerBackend(Backend):
 
     def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
         except docker.errors.NotFound:
@@ -678,7 +633,7 @@ class DockerBackend(Backend):
         import uuid
 
         docker = _docker_module()
-        container_name = self._container_name(name)
+        container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
         except docker.errors.NotFound:

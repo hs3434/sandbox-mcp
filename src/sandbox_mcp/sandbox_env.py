@@ -423,30 +423,36 @@ class SandboxEnv:
     def _op_docker_ps(self, params):
         """List sandbox-mcp-managed containers.
 
-        Walks the :class:`TargetRegistry` and queries each registered
-        docker machine for its current status.  This replaces the
-        earlier ``list_containers(name_prefix=...)`` path which took an
-        agent-supplied prefix and could be used to enumerate every
-        container on the host (nginx, postgres, etc.) — i.e. host
-        fingerprinting.  The agent's view is now constrained to the
-        machines registered in :class:`TargetRegistry`, which is
-        sandbox-mcp's authoritative source of truth.
+        Queries the daemon for all containers with the
+        ``sandbox-mcp.managed=true`` label, adopts each into
+        :class:`TargetRegistry` (idempotent — ``adopt`` is a no-op if
+        the machine is already known), and returns the result.
+
+        This is both the list AND the refresh operation.  The server
+        calls it once at startup (in ``SandboxServer.__init__``) to
+        populate the registry.
         """
-        # Duck-type the docker backend: only it has ``ensure_network``.
-        # This keeps the dispatcher decoupled from the import and lets
-        # tests pass a MagicMock without registering it as DockerBackend.
+        from sandbox_mcp.backends.base import TargetInfo
+
+        managed = self._docker.list_managed_containers()
         containers = []
-        for name in self._machines.list_machines():
-            backend = self._machines.get_backend(name)
-            if not hasattr(backend, "ensure_network"):
-                continue  # SSH backend, not a docker container
-            try:
-                info = backend.get_info(name)
-            except Exception:
-                continue
+        for machine, attrs in managed:
+            # Best-effort fields from container attrs.
+            status = attrs.get("State", {}).get("Status", "unknown")
+            running = status == "running"
+            cfg = attrs.get("Config") or {}
+            image = cfg.get("Image", "")
+            info = TargetInfo(
+                name=machine,
+                backend="docker",
+                status="running" if running else status,
+                image=image,
+                created=attrs.get("Created", ""),
+            )
+            self._machines.adopt(machine, self._docker, info)
             containers.append(
                 {
-                    "name": info.name,
+                    "name": machine,
                     "status": info.status,
                     "image": info.image or "",
                     "created": info.created or "",

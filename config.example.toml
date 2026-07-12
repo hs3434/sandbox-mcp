@@ -50,7 +50,6 @@ work_home = "~/.sandbox-mcp/workspaces/"
 log_path = ""
 
 [docker]
-container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
 default_workdir = "/workspace"
 restart_policy_name = "on-failure"

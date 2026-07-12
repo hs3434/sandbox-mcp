@@ -45,35 +45,24 @@ def test_sandbox_env_status_empty(server):
     assert data["machines"] == []
 
 
-def test_server_reconciles_managed_containers_at_startup(monkeypatch):
-    """A fresh ``SandboxServer`` must adopt pre-existing labeled
-    containers on startup so state survives restart.  Without
-    reconciliation, the agent loses its view of every container it
-    created in the previous process and the namespace boundary
-    disappears until the agent re-registers each one by name.
+def test_server_bootstraps_registry_via_docker_ps(monkeypatch):
+    """``SandboxServer.__init__`` calls ``docker_ps`` once before serving
+    requests so the registry reflects pre-existing labeled containers
+    on the daemon.  No separate ``_reconcile_managed_containers``
+    function — the existing ``docker_ps`` path IS the refresh.
     """
-    from unittest.mock import MagicMock, patch
-
-    fake_container = MagicMock()
-    fake_container.labels = {
-        "sandbox-mcp.managed": "true",
-        "sandbox-mcp.machine": "dev",
-    }
-    fake_container.attrs = {
-        "Created": "2026-01-01T00:00:00Z",
-        "State": {"Status": "running"},
-    }
+    from unittest.mock import patch
 
     with (
         patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
         patch("sandbox_mcp.server.SSHBackend"),
     ):
         mock_docker = mock_docker_cls.return_value
-        mock_docker.list_managed_containers.return_value = [("dev", fake_container.attrs)]
+        attrs = {"State": {"Status": "running"}, "Config": {"Image": "alpine:3"}}
+        mock_docker.list_managed_containers.return_value = [("dev", attrs)]
         srv = SandboxServer()
-    # Reconciled machine is in the registry, with running status, no
-    # create() call.
+    # The dispatcher ran docker_ps during init, populating the registry.
     assert srv.machines.list_machines() == ["dev"]
+    mock_docker.list_managed_containers.assert_called_once()
+    # No create() was ever invoked — adoption only.
     mock_docker.create.assert_not_called()
-    info = srv.machines.get_info("dev")
-    assert info.status == "running"

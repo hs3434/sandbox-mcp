@@ -46,7 +46,9 @@ def test_docker_create(docker_backend, mock_client):
     run_args = mock_client.containers.run.call_args
     assert run_args.args[0] == "python:3.12"
     run_kwargs = run_args.kwargs
-    assert run_kwargs["name"] == "sandbox-dev"
+    # Container is named with the bare machine name — the label, not the
+    # name prefix, is the namespace marker.
+    assert run_kwargs["name"] == "dev"
     # Volume mounts: only the auto-bound work_home mount is allowed;
     # no agent-supplied host paths leak through (security boundary).
     mounts = run_kwargs.get("volumes") or {}
@@ -77,8 +79,11 @@ def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
     assert str(host_path).endswith("/dev"), f"unexpected mount host path: {host_path}"
 
 
-def test_docker_create_uses_config_prefix(monkeypatch, tmp_path, mock_client):
-    """Custom ``container_name_prefix`` from config flows into the SDK call."""
+def test_docker_create_uses_bare_machine_name(monkeypatch, tmp_path, mock_client):
+    """Container names are no longer prefixed — the label is the
+    namespace marker.  The legacy ``container_name_prefix`` config key
+    (if still present in user config) is silently ignored.
+    """
     cfg = tmp_path / "config.toml"
     cfg.write_text('[docker]\ncontainer_name_prefix = "box-"\n')
     monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
@@ -90,7 +95,8 @@ def test_docker_create_uses_config_prefix(monkeypatch, tmp_path, mock_client):
         info = backend.create(name="dev", purpose="t", image="alpine:3")
     assert info.status == "running", f"error: {info.error!r}"
     run_kwargs = mock_client.containers.run.call_args.kwargs
-    assert run_kwargs["name"] == "box-dev"
+    # Bare name; prefix is ignored.
+    assert run_kwargs["name"] == "dev"
 
 
 def test_ensure_client_uses_config_host_when_set(monkeypatch, tmp_path, mock_client):
@@ -158,18 +164,20 @@ def test_ensure_client_falls_back_to_from_env_when_host_empty(monkeypatch, tmp_p
 
 
 def test_docker_create_env_var_overrides_config_prefix(monkeypatch, tmp_path, mock_client):
-    """Env var beats config file for prefix."""
+    """Legacy ``container_name_prefix`` config key is silently ignored —
+    container names are bare machine names now.
+    """
     cfg = tmp_path / "config.toml"
     cfg.write_text('[docker]\ncontainer_name_prefix = "box-"\n')
     monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg))
-    monkeypatch.setenv("SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX", "k8s-")
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path / "wh"))
     with patch("docker.from_env", return_value=mock_client):
         backend = DockerBackend()
         info = backend.create(name="dev", purpose="t", image="alpine:3")
     assert info.status == "running", f"error: {info.error!r}"
     run_kwargs = mock_client.containers.run.call_args.kwargs
-    assert run_kwargs["name"] == "k8s-dev"
+    # Bare machine name — prefix config/env is ignored.
+    assert run_kwargs["name"] == "dev"
 
 
 def test_docker_create_image_not_found(docker_backend, mock_client):
@@ -447,45 +455,36 @@ def test_docker_list_images(docker_backend, mock_client):
     assert docker_backend.list_images() == []
 
 
-def test_docker_list_images_returns_only_managed_and_built(docker_backend, mock_client):
-    """``list_images()`` must not leak the host's full image inventory.
-
-    Only images that are either (a) in use by a registered sandbox
-    machine or (b) built via ``docker_build`` are visible to the agent.
-    The daemon may host private / internal / unrelated images; the
-    agent has no business seeing them.
+def test_docker_create_does_not_reject_sandbox_named_container(docker_backend, mock_client):
+    """Containers are no longer name-prefixed; the label is the only
+    namespace authority.  ``docker_run(name="sandbox-foo")`` is
+    permitted — the label ``sandbox-mcp.managed=true`` is what
+    identifies it as ours, regardless of the chosen name.
     """
-    # Image #1: in use by a registered container (returns short_id only).
-    in_use_image = MagicMock()
-    in_use_image.tags = []  # pulled without tagging, e.g. "postgres:16" by digest
-    in_use_image.short_id = "sha256:aaa111"
-    # Image #2: built via docker_build (recorded in _built_images).
-    built_image = MagicMock()
-    built_image.tags = ["myapp:v1"]
-    built_image.short_id = "sha256:bbb222"
-    # Image #3: present on host but NEITHER in use NOR built — must be filtered out.
-    leaked_image = MagicMock()
-    leaked_image.tags = ["internal-payment-api:v2.3"]
-    leaked_image.short_id = "sha256:ccc333"
-    mock_client.images.list.return_value = [in_use_image, built_image, leaked_image]
+    info = docker_backend.create(name="sandbox-foo", purpose="t", image="alpine:3")
+    assert info.status == "running", f"expected success, got {info!r}"
+    assert info.name == "sandbox-foo"
+    run_kwargs = mock_client.containers.run.call_args.kwargs
+    assert run_kwargs["name"] == "sandbox-foo"
+    assert run_kwargs["labels"]["sandbox-mcp.managed"] == "true"
 
-    docker_backend._built_images = {"myapp:v1"}  # type: ignore[attr-defined]
-    docker_backend._managed_images = {"sha256:aaa111"}  # type: ignore[attr-defined]
+
+def test_docker_list_images_returns_all_daemon_images(docker_backend, mock_client):
+    """``list_images`` is read-only — no production impact from a
+    over-broad list — so we no longer filter.  Agents get the daemon's
+    full inventory back, the same as the original behaviour before the
+    security hardening.
+    """
+    img_a = MagicMock()
+    img_a.tags = ["python:3.12"]
+    img_a.short_id = "sha256:aaa"
+    img_b = MagicMock()
+    img_b.tags = ["internal-payment-api:v2.3"]
+    img_b.short_id = "sha256:bbb"
+    mock_client.images.list.return_value = [img_a, img_b]
 
     result = docker_backend.list_images()
-    ids = {img["image_id"] for img in result}
-    assert ids == {"sha256:aaa111", "sha256:bbb222"}, f"unmanaged images leaked to agent: {result}"
-
-
-def test_docker_create_rejects_name_with_prefix(docker_backend, mock_client):
-    """``docker_run(name="sandbox-foo")`` would create ``sandbox-sandbox-foo`` —
-    confusing because the agent looks like it's reaching for a host-managed
-    container.  Reject names that already start with the configured prefix.
-    """
-    info = docker_backend.create(name="sandbox-attacker", purpose="t", image="alpine:3")
-    assert info.status == "error", f"expected rejection, got {info!r}"
-    assert "prefix" in info.error.lower()
-    mock_client.containers.run.assert_not_called()
+    assert {img["tag"] for img in result} == {"python:3.12", "internal-payment-api:v2.3"}
 
 
 def test_list_managed_containers_filters_by_label(docker_backend, mock_client):

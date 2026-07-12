@@ -49,7 +49,6 @@ port = 9999
 
 [docker]
 default_image = "ubuntu:24.04"
-container_name_prefix = "box-"
 
 [shell]
 default_max_output = 1024
@@ -60,7 +59,6 @@ default_max_output = 1024
     assert cfg.server.host == "127.0.0.1"
     assert cfg.server.port == 9999
     assert cfg.docker.default_image == "ubuntu:24.04"
-    assert cfg.docker.container_name_prefix == "box-"
     assert cfg.shell.head_size == ShellConfig.head_size
     assert cfg.shell.default_max_output == 1024
 
@@ -82,7 +80,6 @@ default_image = "ubuntu:24.04"
     cfg = load()
     assert cfg.server.port == 1234
     assert cfg.docker.default_image == "alpine:3.20"
-    assert cfg.docker.container_name_prefix == DockerConfig.container_name_prefix
 
 
 def test_env_var_alone(monkeypatch):
@@ -155,18 +152,6 @@ def test_repo_example_matches_dataclass_defaults():
         f"config.example.toml does not match AppConfig() defaults.\n"
         f"  parsed: {parsed}\n  expected: {expected}"
     )
-
-
-def test_docker_config_rejects_empty_prefix(monkeypatch):
-    """container_name_prefix must not be empty — it's the only thing that
-    separates sandbox-mcp's containers from the host's.  An empty prefix
-    would let ``docker_run(name='nginx')`` create / manage a host-side
-    ``nginx`` container.
-    """
-    from sandbox_mcp.config import DockerConfig
-
-    with pytest.raises(ValueError, match="container_name_prefix"):
-        DockerConfig(container_name_prefix="")
 
 
 def test_repo_example_uses_known_sections():

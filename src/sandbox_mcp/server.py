@@ -34,7 +34,6 @@ import secrets
 import time
 
 from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
-from sandbox_mcp.backends.base import TargetInfo
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
 from sandbox_mcp.config import load as _load_config
@@ -279,55 +278,18 @@ class SandboxServer:
         self.shells = ShellRegistry()
         self._docker_backend = DockerBackend()
         self._ssh_backend = SSHBackend()
-        # Reconcile before any request can be served: adopt pre-existing
-        # sandbox-mcp containers (identified by docker label, NOT by
-        # name prefix — the label is the authoritative marker) so the
-        # in-memory registry reflects what's actually on the daemon.
-        # This runs once per server start; failures are logged and
-        # tolerated so a transient docker outage doesn't prevent boot.
-        self._reconcile_managed_containers()
         self.sandbox_env = SandboxEnv(
             self.machines, self.shells, self._docker_backend, self._ssh_backend
         )
         self.audit = audit if audit is not None else DEFAULT_AUDIT_LOGGER
-
-    def _reconcile_managed_containers(self) -> None:
-        """Adopt containers this server managed in a previous process.
-
-        Idempotent: ``TargetRegistry.adopt`` skips already-known names,
-        so a mid-session reconciliation would be a no-op.  We only run
-        this at startup, so name clashes with mid-session state can't
-        happen.
-        """
+        # Bootstrap: run ``docker_ps`` once before any request can be
+        # served so pre-existing labeled containers are adopted into
+        # the registry.  Failures are logged and tolerated so a
+        # transient docker outage doesn't prevent boot.
         try:
-            managed = self._docker_backend.list_managed_containers()
+            self.sandbox_env.dispatch("docker_ps", {})
         except Exception:
-            logger.exception("startup reconcile: docker query failed")
-            return
-        for machine, attrs in managed:
-            try:
-                status = attrs.get("State", {}).get("Status", "unknown")
-                running = status == "running"
-                # Best-effort image tag from container.attrs.Config.Image.
-                # Falls back to "" if missing.
-                cfg = attrs.get("Config") or {}
-                image = cfg.get("Image", "")
-                info = TargetInfo(
-                    name=machine,
-                    backend="docker",
-                    status="running" if running else status,
-                    purpose="(reconciled from daemon)",
-                    image=image,
-                    created=attrs.get("Created", ""),
-                )
-                self.machines.adopt(machine, self._docker_backend, info)
-                logger.info(
-                    "startup reconcile: adopted machine %r (status=%s)",
-                    machine,
-                    info.status,
-                )
-            except Exception:
-                logger.exception("startup reconcile: failed to adopt %r", machine)
+            logger.exception("startup bootstrap: docker_ps failed")
 
     def list_tools(self):
         return [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
