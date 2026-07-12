@@ -24,9 +24,9 @@ port = 8010
 auth_tokens_file = "~/.sandbox-mcp/auth_tokens"
 
 # If true and auth_tokens_file is missing/empty, generate an ephemeral
-# token at startup and print it to stderr.  Default false = fail
-# closed (the server refuses to start without configured tokens).
-auto_generate_if_empty = false
+# token at startup and print it to stderr.  Set to false to fail-closed
+# (the server refuses to start without configured tokens).
+auto_generate_if_empty = true
 
 [storage]
 # Root directory for per-machine persistent workspaces.

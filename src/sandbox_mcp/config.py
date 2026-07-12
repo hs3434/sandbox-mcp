@@ -42,7 +42,7 @@ class ServerConfig:
     # If true, generate an ephemeral token at startup when the file is
     # missing/empty.  Default false = fail closed (server refuses to
     # start without configured tokens).
-    auto_generate_if_empty: bool = False
+    auto_generate_if_empty: bool = True
 
 
 @dataclass(frozen=True)
