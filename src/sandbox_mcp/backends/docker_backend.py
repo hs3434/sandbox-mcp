@@ -104,6 +104,14 @@ class DockerExecProcess:
                 try:
                     while len(header) < 8:
                         chunk = sock.read(8 - len(header))
+                        # Defense in depth: a broken/truncated socket (or a
+                        # test mock that returns a non-bytes object) would
+                        # otherwise spin here forever — ``b"" + MagicMock``
+                        # returns a MagicMock via __radd__, never raising,
+                        # so the inner ``except (OSError, AttributeError)``
+                        # never fires.  Bail cleanly so ``_done`` gets set.
+                        if not isinstance(chunk, (bytes, bytearray)):
+                            return
                         if not chunk:
                             return
                         header += chunk
@@ -114,6 +122,8 @@ class DockerExecProcess:
                 try:
                     while len(payload) < payload_len:
                         chunk = sock.read(payload_len - len(payload))
+                        if not isinstance(chunk, (bytes, bytearray)):
+                            return
                         if not chunk:
                             break
                         payload += chunk
@@ -151,6 +161,13 @@ class DockerExecProcess:
         return info.get("ExitCode", -1)
 
     def kill(self):
+        # Close the FileIO wrappers first so their __del__ doesn't run
+        # against an already-closed fd (which would raise EBADF during GC
+        # and surface as a PytestUnraisableExceptionWarning).
+        with contextlib.suppress(Exception):
+            self.stdin.close()
+        with contextlib.suppress(Exception):
+            self.stdout.close()
         with contextlib.suppress(OSError):
             os.close(self._stdin_w_fd)
         with contextlib.suppress(OSError):
@@ -180,6 +197,23 @@ class DockerBackend(Backend):
 
     # ---- lifecycle ----
 
+    def ensure_network(self, name: str) -> None:
+        """Create the user-defined bridge network ``name`` if it doesn't exist.
+
+        Idempotent: subsequent calls are no-ops.  If ``name`` is empty
+        the method returns immediately (no-op mode).
+        """
+        if not name:
+            return
+        docker = _docker_module()
+        try:
+            self._ensure_client().networks.get(name)
+        except docker.errors.NotFound:
+            with contextlib.suppress(docker.errors.APIError):
+                self._ensure_client().networks.create(name, driver="bridge", check_duplicate=True)
+        except docker.errors.APIError:
+            pass  # daemon unreachable — not fatal (container run will fail later)
+
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
         image = kwargs.get("image", docker_cfg.default_image)
@@ -189,6 +223,11 @@ class DockerBackend(Backend):
         workdir = kwargs.get("workdir", docker_cfg.default_workdir)
 
         container_name = self._container_name(name)
+
+        # Ensure shared network for DNS-resolvable container names.
+        auto_network = docker_cfg.auto_network
+        if auto_network:
+            self.ensure_network(auto_network)
 
         # Auto-create a persistent workspace directory on the host and mount
         # it to /workspace inside the container.  The agent never sees the
@@ -233,6 +272,7 @@ class DockerBackend(Backend):
                 volumes=volume_bindings if volume_bindings else None,
                 ports=port_bindings if port_bindings else None,
                 environment=env or None,
+                network=auto_network or None,
                 command="sleep infinity",
             )
         except _docker_module().errors.APIError as e:

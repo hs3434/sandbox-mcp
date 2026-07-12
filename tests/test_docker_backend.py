@@ -1,3 +1,5 @@
+import socket
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -294,6 +296,43 @@ def test_docker_open_shell(docker_backend, mock_client):
     b.close()
 
 
+def test_docker_open_shell_close_bails_on_garbage_socket(docker_backend, mock_client):
+    """shell.close() must join the demux/stdin threads quickly even if
+    the underlying socket returns something that isn't ``bytes``.
+
+    Defense in depth: if a real docker socket ever returns non-bytes
+    (truncated frame, network error, mock test double that returns
+    ``MagicMock``), the demux loop would otherwise spin forever on
+    ``header += chunk`` (which silently produces a ``MagicMock`` for
+    ``b"" + MagicMock``), pegging a CPU core and starving subsequent
+    tests in the suite.  ``_done.set()`` in the loop's ``finally`` is
+    never reached because the thread is stuck in the inner loop.
+    """
+    container = mock_client.containers.get.return_value
+    container.id = "c123"
+    api = mock_client.api
+    api.exec_create.return_value = {"Id": "e789"}
+
+    a, b = socket.socketpair()
+    socket_mock = MagicMock()
+    socket_mock._sock = b
+    # Garbage: returns MagicMock, not bytes.  Mirrors what test_docker_open_shell
+    # would produce if the mock socket were ever used for an actual read.
+    api.exec_start.return_value = socket_mock
+
+    shell = docker_backend.open_shell("dev")
+    t0 = time.time()
+    shell.close()
+    elapsed = time.time() - t0
+    a.close()
+    b.close()
+
+    assert elapsed < 1.0, (
+        f"shell.close() took {elapsed:.2f}s; demux loop likely spinning "
+        f"on non-bytes from socket.  See DockerExecProcess._demux_loop."
+    )
+
+
 def test_docker_exec_oneoff(docker_backend, mock_client):
     """exec_oneoff uses SDK exec_run (stdin data embedded in command)."""
     container = mock_client.containers.get.return_value
@@ -327,3 +366,59 @@ def test_docker_list_containers(docker_backend, mock_client):
 def test_docker_list_images(docker_backend, mock_client):
     mock_client.images.list.return_value = []
     assert docker_backend.list_images() == []
+
+
+# ---- auto-network ----
+
+
+def test_ensure_network_creates_when_not_found(docker_backend, mock_client):
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.networks.get.side_effect = DockerNotFound("not found")
+    docker_backend.ensure_network("sandbox-mcp")
+    mock_client.networks.create.assert_called_once_with(
+        "sandbox-mcp", driver="bridge", check_duplicate=True
+    )
+
+
+def test_ensure_network_noop_when_exists(docker_backend, mock_client):
+    mock_client.networks.get.return_value = MagicMock()
+    docker_backend.ensure_network("sandbox-mcp")
+    mock_client.networks.create.assert_not_called()
+
+
+def test_ensure_network_empty_name_is_noop(docker_backend, mock_client):
+    docker_backend.ensure_network("")
+    mock_client.networks.get.assert_not_called()
+    mock_client.networks.create.assert_not_called()
+
+
+def test_ensure_network_swallows_race_during_create(docker_backend, mock_client):
+    from docker.errors import APIError
+
+    mock_client.networks.get.side_effect = APIError("something")
+    docker_backend.ensure_network("sandbox-mcp")
+    # swallow — not a fatal path
+
+
+def test_create_passes_auto_network(docker_backend, mock_client, monkeypatch):
+    """create() passes network=auto_network to containers.run."""
+    from docker.errors import APIError as DockerAPIError
+
+    mock_client.networks.get.side_effect = DockerAPIError("mock")
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "running"
+    run_kwargs = mock_client.containers.run.call_args.kwargs
+    assert run_kwargs.get("network") == "sandbox-mcp"
+
+
+def test_create_empty_auto_network_omits_network(
+    docker_backend, mock_client, monkeypatch, tmp_path
+):
+    """When auto_network is empty, containers.run gets network=None."""
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_AUTO_NETWORK", "")
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "running"
+    run_kwargs = mock_client.containers.run.call_args.kwargs
+    assert run_kwargs.get("network") is None
