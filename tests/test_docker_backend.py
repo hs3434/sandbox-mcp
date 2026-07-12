@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -115,14 +116,137 @@ def test_docker_commit(docker_backend, mock_client):
     assert result["status"] == "committed"
 
 
-def test_docker_build(docker_backend, tmp_path):
-    """build() needs a real Dockerfile on disk."""
-    df = tmp_path / "Dockerfile"
-    df.write_text("FROM python:3.12\n")
+def test_docker_build(docker_backend, tmp_path, monkeypatch):
+    """build() in file mode reads Dockerfile from work_home/<machine>/."""
+    # Redirect work_home so we don't touch the real home dir.
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    machine_dir = tmp_path / "dev"
+    machine_dir.mkdir()
+    df = machine_dir / "Dockerfile"
+    df.write_text("FROM debian:stable-slim\n")
+
     with patch.object(docker_backend._ensure_client().images, "build") as mock_build:
         mock_build.return_value = (MagicMock(), [])
-        result = docker_backend.build("my-image:latest", str(df), context_dir=str(tmp_path))
-        assert result["status"] == "built"
+        result = docker_backend.build(
+            "my-image:latest",
+            machine="dev",
+            dockerfile="/workspace/Dockerfile",
+            context_dir="/workspace",
+        )
+    assert result["status"] == "built"
+    # Verify the SDK got the host path, not the container path.
+    build_kwargs = mock_build.call_args.kwargs
+    assert build_kwargs["path"] == str(machine_dir)
+    assert build_kwargs["dockerfile"] == "Dockerfile"
+
+
+def test_docker_build_default_paths(docker_backend, tmp_path, monkeypatch):
+    """dockerfile and context_dir default to /workspace/Dockerfile and /workspace."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    machine_dir = tmp_path / "dev"
+    machine_dir.mkdir()
+    (machine_dir / "Dockerfile").write_text("FROM debian\n")
+
+    with patch.object(docker_backend._ensure_client().images, "build") as mock_build:
+        mock_build.return_value = (MagicMock(), [])
+        result = docker_backend.build("img:latest", machine="dev")
+    assert result["status"] == "built"
+    assert mock_build.call_args.kwargs["path"] == str(machine_dir.resolve())
+
+
+def test_docker_build_inline_mode(docker_backend, tmp_path, monkeypatch):
+    """dockerfile_content stages to work_home/_builds/<uuid>/ and builds."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    captured = {}
+
+    def fake_build(path, dockerfile, tag, rm):
+        captured["path"] = path
+        captured["dockerfile"] = dockerfile
+        # Verify Dockerfile was written with our content.
+        assert (Path(path) / "Dockerfile").read_text(encoding="utf-8") == "FROM scratch\n"
+        return (MagicMock(), [])
+
+    with patch.object(docker_backend._ensure_client().images, "build", side_effect=fake_build):
+        result = docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
+    assert result["status"] == "built"
+    assert captured["dockerfile"] == "Dockerfile"
+    # Inline mode does not need a machine — no machine arg was given.
+    assert result["status"] == "built"
+
+
+def test_docker_build_inline_mode_cleans_tmpdir(docker_backend, tmp_path, monkeypatch):
+    """After inline build, the temp dir under work_home/_builds is removed."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    with patch.object(
+        docker_backend._ensure_client().images, "build", return_value=(MagicMock(), [])
+    ):
+        docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
+    # Only the _builds/ root should remain; the per-build subdir should be gone.
+    builds_root = tmp_path / "_builds"
+    if builds_root.exists():
+        assert list(builds_root.iterdir()) == []
+
+
+def test_docker_build_file_mode_requires_machine(docker_backend):
+    """File mode without dockerfile_content and without machine → error."""
+    result = docker_backend.build("img:latest")
+    assert result["status"] == "error"
+    assert "machine is required" in result["error"]
+
+
+def test_docker_build_rejects_host_path(docker_backend, tmp_path, monkeypatch):
+    """Host paths (anything not under /workspace) are rejected — sandbox boundary."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    result = docker_backend.build(
+        "img:latest",
+        machine="dev",
+        dockerfile="/etc/passwd",
+        context_dir="/workspace",
+    )
+    assert result["status"] == "error"
+    assert "/workspace" in result["error"]
+    assert "sandbox boundary" in result["error"]
+
+
+def test_docker_build_rejects_host_context(docker_backend, tmp_path, monkeypatch):
+    """context_dir outside /workspace is also rejected."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    result = docker_backend.build(
+        "img:latest",
+        machine="dev",
+        dockerfile="/workspace/Dockerfile",
+        context_dir="/etc",
+    )
+    assert result["status"] == "error"
+    assert "sandbox boundary" in result["error"]
+
+
+def test_docker_build_nested_workspace_path(docker_backend, tmp_path, monkeypatch):
+    """Container paths under /workspace/foo translate to work_home/<machine>/foo."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    nested = tmp_path / "dev" / "app" / "Dockerfile"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("FROM debian\n")
+
+    with patch.object(docker_backend._ensure_client().images, "build") as mock_build:
+        mock_build.return_value = (MagicMock(), [])
+        result = docker_backend.build(
+            "img:latest",
+            machine="dev",
+            dockerfile="/workspace/app/Dockerfile",
+            context_dir="/workspace/app",
+        )
+    assert result["status"] == "built"
+    assert mock_build.call_args.kwargs["path"] == str((tmp_path / "dev" / "app").resolve())
+
+
+def test_docker_build_missing_dockerfile(docker_backend, tmp_path, monkeypatch):
+    """File mode with no Dockerfile on disk → error (not SDK exception)."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    (tmp_path / "dev").mkdir()
+    result = docker_backend.build("img:latest", machine="dev")
+    assert result["status"] == "error"
+    assert "Dockerfile not found" in result["error"]
 
 
 def test_docker_open_shell(docker_backend, mock_client):

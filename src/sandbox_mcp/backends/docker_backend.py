@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
-from sandbox_mcp.config import get_work_dir
+from sandbox_mcp.config import get_work_dir, get_work_home
 from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.shell_session import ShellSession
 
@@ -30,6 +30,24 @@ def _docker_module():
     import docker
 
     return docker
+
+
+def _container_to_host(container_path: str, machine: str) -> Path:
+    """Translate a path under ``/workspace/`` to its host bind-mount location.
+
+    The agent only knows container paths.  sandbox-mcp mounts the host's
+    ``work_home/<machine>/`` into the container at ``/workspace``, so any
+    file the agent wrote via :func:`sandbox_file_write` lives at the
+    translated host path on the operator's filesystem.
+
+    Anything outside ``/workspace/`` is rejected — exposing host paths
+    to the agent would break the sandbox boundary.
+    """
+    if container_path != "/workspace" and not container_path.startswith("/workspace/"):
+        raise ValueError(f"path must be under /workspace (sandbox boundary): {container_path!r}")
+    rel = container_path[len("/workspace/") :] if container_path != "/workspace" else ""
+    target = get_work_home() / machine / rel
+    return target
 
 
 class DockerExecProcess:
@@ -299,28 +317,103 @@ class DockerBackend(Backend):
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return {"error": str(e), "image_tag": tag, "status": "error"}
 
-    def build(self, image_tag: str, dockerfile: str, context_dir: str | None = None) -> dict:
+    def build(
+        self,
+        image_tag: str,
+        *,
+        machine: str | None = None,
+        dockerfile: str = "/workspace/Dockerfile",
+        context_dir: str = "/workspace",
+        dockerfile_content: str | None = None,
+    ) -> dict:
+        """Build a Docker image, sandbox-style.
+
+        Two modes:
+
+        - **Inline** (``dockerfile_content`` provided): the Dockerfile
+          is written to a sandbox-mcp-managed temp dir and built from
+          there.  No running container required.
+        - **File** (default): the agent has already written the
+          Dockerfile (and any other context files) into a container's
+          ``/workspace/`` via :func:`sandbox_file_write`.  The bind
+          mount surfaces them on the host at
+          ``work_home/<machine>/``.  This method translates the
+          container path back to the host path and runs the build.
+
+        ``dockerfile`` and ``context_dir`` must both be under
+        ``/workspace/`` — host paths are not accepted (sandbox boundary).
+        """
         docker = _docker_module()
-        ctx = context_dir or "."
-        df_path = Path(dockerfile)
-        if not df_path.is_absolute():
-            df_path = Path(ctx) / df_path
-        if not df_path.exists():
+
+        # Inline mode — no container context needed.
+        if dockerfile_content is not None:
+            return self._build_inline(image_tag, dockerfile_content)
+
+        # File mode — translate container paths to host paths.
+        if machine is None:
             return {
-                "error": f"Dockerfile not found: {df_path}",
+                "error": "machine is required when dockerfile_content is not given",
+                "image_tag": image_tag,
+                "status": "error",
+            }
+        try:
+            ctx_host = _container_to_host(context_dir, machine)
+            df_host = _container_to_host(dockerfile, machine)
+        except ValueError as e:
+            return {
+                "error": str(e),
+                "image_tag": image_tag,
+                "status": "error",
+            }
+        if not df_host.is_file():
+            return {
+                "error": f"Dockerfile not found: {df_host}",
+                "image_tag": image_tag,
+                "status": "error",
+            }
+        if not ctx_host.is_dir():
+            return {
+                "error": f"Build context not found: {ctx_host}",
                 "image_tag": image_tag,
                 "status": "error",
             }
         try:
             self._ensure_client().images.build(
-                path=str(df_path.parent),
-                dockerfile=str(df_path.name),
+                path=str(ctx_host),
+                dockerfile=str(df_host.name),
                 tag=image_tag,
                 rm=True,
             )
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
+
+    def _build_inline(self, image_tag: str, dockerfile_content: str) -> dict:
+        """Write ``dockerfile_content`` to a temp dir and build from it."""
+        import tempfile
+        from contextlib import suppress
+
+        docker = _docker_module()
+        builds_root = get_work_home() / "_builds"
+        builds_root.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix="inline-", dir=builds_root))
+        try:
+            (tmp / "Dockerfile").write_text(dockerfile_content, encoding="utf-8")
+            try:
+                self._ensure_client().images.build(
+                    path=str(tmp),
+                    dockerfile="Dockerfile",
+                    tag=image_tag,
+                    rm=True,
+                )
+                return {"image_tag": image_tag, "status": "built"}
+            except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
+                return {"error": str(e), "image_tag": image_tag, "status": "error"}
+        finally:
+            with suppress(OSError):
+                import shutil
+
+                shutil.rmtree(tmp)
 
     def suggest_paths(self, name: str, missing_path: str) -> list:
         dirname = str(Path(missing_path).parent)

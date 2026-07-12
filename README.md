@@ -1,5 +1,7 @@
 # Sandbox Environment Manager MCP
 
+**Languages**: [English](README.md) · [中文](README.zh.md)
+
 An MCP (Model Context Protocol) server that provides persistent sandbox environment
 management for AI agents. Manages Docker containers and SSH machines as execution
 targets, with shell-based command execution and full file operation capabilities.
@@ -86,7 +88,7 @@ log_path = ""           # "" = stderr; set to a file path to append
 
 [docker]                # container defaults
 container_name_prefix = "sandbox-"
-default_image = "python:3.12-slim"
+default_image = "debian:stable-slim"
 default_workdir = "/workspace"
 image_repo = "sandbox-mcp"
 restart_policy_name = "on-failure"
@@ -165,6 +167,37 @@ agent:
 
 `docker_run` is idempotent: if a container named `sandbox-<name>` already exists
 (e.g. after an MCP restart), it reattaches instead of failing.
+
+### `docker_build` Usage
+
+The agent never touches the host filesystem. `docker_build` provides two
+modes:
+
+**File mode** (recommended): agent writes the Dockerfile into the container's
+`/workspace/` via `sandbox_file_write`, then calls:
+
+```python
+sandbox_file_write(path="/workspace/Dockerfile",
+                   content="FROM debian:stable-slim\nRUN apt install -y python3\n")
+sandbox_env(action="docker_build",
+            machine="dev",
+            image_tag="myapp:v1")
+# Defaults: dockerfile=/workspace/Dockerfile, context_dir=/workspace
+# sandbox-mcp translates the container path to work_home/<machine>/ on the host
+```
+
+**Inline mode** (for one-shot builds or no running container):
+
+```python
+sandbox_env(action="docker_build",
+            image_tag="myapp:latest",
+            dockerfile_content="FROM debian:stable-slim\nRUN apt install -y python3\n")
+# sandbox-mcp stages the content at work_home/_builds/<uuid>/Dockerfile and cleans up after
+```
+
+**Sandbox boundary**: `dockerfile` and `context_dir` must live under
+`/workspace/`. Host paths are rejected — the agent cannot reach files
+outside its assigned `work_home/<machine>/`.
 
 ## Limitations
 

@@ -48,7 +48,7 @@ class AuditConfig:
 @dataclass(frozen=True)
 class DockerConfig:
     container_name_prefix: str = "sandbox-"
-    default_image: str = "python:3.12-slim"
+    default_image: str = "debian:stable-slim"
     default_workdir: str = "/workspace"
     image_repo: str = "sandbox-mcp"
     restart_policy_name: str = "on-failure"

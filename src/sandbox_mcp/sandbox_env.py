@@ -119,9 +119,22 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_build",
-            "description": "Build a custom Docker image from a Dockerfile.",
-            "required": {"image_tag": "string", "dockerfile": "string"},
-            "optional": {"context_dir": "string"},
+            "description": (
+                "Build a Docker image. Two forms: (1) file mode — "
+                "provide machine (default dockerfile=/workspace/Dockerfile, "
+                "context_dir=/workspace); sandbox-mcp maps those container "
+                "paths to work_home/<machine>/ on the host. (2) inline mode "
+                "— provide dockerfile_content; the Dockerfile is staged in "
+                "work_home/_builds/<uuid>/ and built from there. Host paths "
+                "are never accepted."
+            ),
+            "required": {"image_tag": "string"},
+            "optional": {
+                "machine": "string — required for file mode",
+                "dockerfile": "string — default /workspace/Dockerfile",
+                "context_dir": "string — default /workspace",
+                "dockerfile_content": "string — enables inline mode (skips container)",
+            },
             "returns": {"image_tag": "string", "status": "built"},
         },
         {
@@ -317,11 +330,38 @@ class SandboxEnv:
         return {"name": info.name, "status": info.status, "backend": "docker"}
 
     def _op_docker_build(self, params):
-        err = self._require(params, "image_tag", "dockerfile")
+        """Build a Docker image. Two forms:
+
+        - **File mode** (default): provide ``machine`` (and optionally
+          ``dockerfile``, ``context_dir``).  The agent writes files into
+          the container's ``/workspace/`` via ``sandbox_file_write``;
+          sandbox-mcp translates to host paths under
+          ``work_home/<machine>/`` and runs ``docker build``.
+        - **Inline mode**: provide ``dockerfile_content``.  The
+          Dockerfile is staged in ``work_home/_builds/<uuid>/`` and
+          built from there.  No running container required.
+
+        ``dockerfile`` and ``context_dir`` (when used) must be under
+        ``/workspace/``; host paths are rejected at the sandbox boundary.
+        """
+        err = self._require(params, "image_tag")
         if err is not None:
             return {"error": err}
+        inline = params.get("dockerfile_content")
+        machine = params.get("machine")
+        if inline is None:
+            if not machine:
+                return {"error": "machine is required when dockerfile_content is not given"}
+            try:
+                self._machines.resolve_machine(machine)
+            except ValueError as e:
+                return {"error": str(e)}
         return self._docker.build(
-            params["image_tag"], params["dockerfile"], params.get("context_dir")
+            params["image_tag"],
+            machine=machine,
+            dockerfile=params.get("dockerfile", "/workspace/Dockerfile"),
+            context_dir=params.get("context_dir", "/workspace"),
+            dockerfile_content=inline,
         )
 
     def _op_docker_commit(self, params):
