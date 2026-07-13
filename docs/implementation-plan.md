@@ -73,7 +73,7 @@ name = "sandbox-mcp"
 version = "0.2.0"
 description = "Sandbox Environment Manager MCP server"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0-only"}
 authors = [{name = "Sandbox MCP Contributors"}]
 dependencies = [
     "mcp>=1.0.0",

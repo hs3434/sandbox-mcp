@@ -421,3 +421,15 @@ sandbox-mcp                     sandbox-mcp-http
 
 See [docs/design-spec-v2.md](docs/design-spec-v2.md) for the current design specification.
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the TDD implementation plan.
+
+## License
+
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE)
+(AGPL-3.0-only).
+
+- **Open-source use** — you are free to use, modify, and distribute this software
+  under the terms of the AGPLv3, including the requirement that modified versions
+  serving users over a network must also provide their source code.
+- **Commercial use** — if you wish to use this software in a closed-source or
+  proprietary context without the AGPLv3 obligations, a separate commercial
+  license is available. Contact **1606272735@qq.com** for details.
