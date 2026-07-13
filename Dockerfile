@@ -16,9 +16,6 @@ COPY pyproject.toml LICENSE ./
 COPY src/ ./src/
 RUN pip install --no-cache-dir .
 
-# Config and workspace directories
-RUN mkdir -p /home/sandbox/.sandbox-mcp /var/lib/sandbox-mcp/workspaces
-
 EXPOSE 8010
 
 ENTRYPOINT ["sandbox-mcp-http"]
