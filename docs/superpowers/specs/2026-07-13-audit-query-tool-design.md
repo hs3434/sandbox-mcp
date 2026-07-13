@@ -40,6 +40,34 @@ the log.
 
 ## Design
 
+### Default log path
+
+`AuditConfig.log_path` default changes from `""` (stderr) to
+`"~/.sandbox-mcp/audit.log"`. Rationale: audit persistence is the
+norm; stderr-only mode is the exception (only useful when an external
+log collector is attached). A file default also makes
+`sandbox_audit_query` available out of the box — no extra config
+required.
+
+`config.example.toml` `[audit]` section updated to comment out the
+default with the path spelled out.
+
+### Conditional tool exposure
+
+`list_tools()` reads `cfg.audit.log_path` and omits
+`sandbox_audit_query` from the returned tool list when the path is
+empty. The agent never sees a tool it cannot use; there is no error
+path for "not file-backed".
+
+- Server logs a one-line startup message:
+  - `audit: log_path=~/.sandbox-mcp/audit.log (query tool enabled)`
+    or
+  - `audit: log_path=<empty> (query tool disabled)`
+- The audit config is loaded once at server startup (consistent with
+  the rest of the config pipeline — there is no hot-reload for
+  audit). The tool's presence/absence therefore reflects the value
+  at startup, not live edits.
+
 ### Tool: `sandbox_audit_query`
 
 Single parameterized tool. Path comes from server config; the agent
@@ -92,7 +120,7 @@ never sees the raw path.
 
 | Condition                            | Behaviour                                |
 |--------------------------------------|------------------------------------------|
-| `log_path` empty / unset             | Error: `"audit log is not file-backed"`  |
+| `log_path` empty at startup          | Tool not exposed (filtered from `list_tools()`) |
 | File missing                         | `{records: [], total: 0, tail_size: 0}`  |
 | File empty                           | Same as missing                          |
 | `start >= total`                     | Empty `records`; `total` still reported  |
@@ -152,6 +180,8 @@ In `src/sandbox_mcp/server.py`, register the tool:
 def call_audit_query(self, args):
     cfg = _load_config()
     log_path = cfg.audit.log_path
+    # Empty log_path is filtered out of list_tools(), so this branch is
+    # defensive: only reachable if config changes mid-session.
     if not log_path:
         return [TextContent(json.dumps({
             "error": "audit log is not file-backed",
@@ -184,7 +214,25 @@ def call_audit_query(self, args):
     }))]
 ```
 
-Hook into `call_tool` dispatcher and add to `list_tools()` output.
+In `list_tools()`, append the audit tool only when `log_path` is set:
+
+```python
+def list_tools(self):
+    tools = [...existing 7 tools...]
+    if _load_config().audit.log_path:
+        tools.append(_AUDIT_QUERY_TOOL)
+    return tools
+```
+
+Add a startup log line indicating audit state:
+
+```python
+log_path = _load_config().audit.log_path
+if log_path:
+    logger.info("audit: log_path=%s (query tool enabled)", log_path)
+else:
+    logger.warning("audit: log_path=<empty> (query tool disabled)")
+```
 
 ### Tool definition (MCP `tools/list`)
 
@@ -243,14 +291,21 @@ New file `tests/test_audit_query.py`:
 - Missing file → empty result, no error
 - Empty file → empty result, no error
 - Malformed lines skipped, stderr warning emitted
-- `log_path` empty → error string in response
+- `list_tools()` omits the tool when `log_path` is empty (set
+  `SANDBOX_MCP_AUDIT_LOG_PATH=""` and verify tool absent from list)
 - Records emitted between two queries are visible to the second
   (no stale caching)
 
 ## Migration / Compatibility
 
-- Purely additive: one new tool, no change to existing tools or config
-- No config migration, no env var changes
+- Purely additive at the API level: one new tool, no change to
+  existing tools
+- **Behavioural change**: `[audit] log_path` default moves from `""`
+  to `"~/.sandbox-mcp/audit.log"`. Existing deployments that relied
+  on stderr logging will now write to a file by default. To restore
+  the old behaviour, set `log_path = ""` (or
+  `SANDBOX_MCP_AUDIT_LOG_PATH=""`).
+- No env var rename; `SANDBOX_MCP_AUDIT_LOG_PATH` semantics unchanged
 
 ## Open Questions
 
