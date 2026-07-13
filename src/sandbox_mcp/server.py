@@ -255,6 +255,29 @@ TOOL_DEFINITIONS = [
 ]
 
 
+_AUDIT_QUERY_TOOL_DEFINITION = {
+    "name": "sandbox_audit_query",
+    "description": (
+        "Query the audit log (read-only). Reads at most `tail` lines from "
+        "the end of the file; filters apply within that tail; `start`/`end` "
+        "page over the filtered results."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "tail": {"type": "integer", "default": 5000, "minimum": 1, "maximum": 100000},
+            "start": {"type": "integer", "default": 0, "minimum": 0},
+            "end": {"type": "integer", "default": 100, "minimum": 1},
+            "action": {"type": "string"},
+            "machine": {"type": "string"},
+            "status": {"type": "string"},
+            "since": {"type": "number"},
+            "until": {"type": "number"},
+        },
+    },
+}
+
+
 class ToolDef:
     def __init__(self, name, description, inputSchema):
         self.name = name
@@ -290,7 +313,11 @@ class SandboxServer:
             logger.exception("startup bootstrap: docker_ps failed")
 
     def list_tools(self):
-        return [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
+        tools = [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
+        if _load_config().audit.log_path:
+            t = _AUDIT_QUERY_TOOL_DEFINITION
+            tools.append(ToolDef(t["name"], t["description"], t["inputSchema"]))
+        return tools
 
     def call_tool(self, name, arguments):
         handler = getattr(self, f"_handle_{name}", None)

@@ -28,17 +28,34 @@ def server():
         return SandboxServer()
 
 
-def test_list_tools_returns_7(server):
+def test_list_tools_includes_audit_query_by_default(server):
+    """With the default config, audit is file-backed, so the tool is exposed."""
     tools = server.list_tools()
-    assert len(tools) == 7
     names = {t.name for t in tools}
+    expected = {
+        "sandbox_shell_exec",
+        "sandbox_shell_read",
+        "sandbox_file_read",
+        "sandbox_file_write",
+        "sandbox_file_patch",
+        "sandbox_file_search",
+        "sandbox_env",
+        "sandbox_audit_query",
+    }
+    assert expected.issubset(names)
+
+
+def test_list_tools_omits_audit_query_when_log_path_empty(monkeypatch):
+    """When [audit] log_path is empty, the audit tool is hidden from agents."""
+    monkeypatch.setenv("SANDBOX_MCP_AUDIT_LOG_PATH", "")
+    from unittest.mock import patch
+
+    with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
+        srv = SandboxServer()
+    names = {t.name for t in srv.list_tools()}
+    assert "sandbox_audit_query" not in names
+    # Sanity: other tools still present
     assert "sandbox_shell_exec" in names
-    assert "sandbox_shell_read" in names
-    assert "sandbox_file_read" in names
-    assert "sandbox_file_write" in names
-    assert "sandbox_file_patch" in names
-    assert "sandbox_file_search" in names
-    assert "sandbox_env" in names
 
 
 def test_call_unknown_tool(server):
