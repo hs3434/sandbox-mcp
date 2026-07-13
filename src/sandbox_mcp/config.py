@@ -72,7 +72,7 @@ class StorageConfig:
 
 @dataclass(frozen=True)
 class AuditConfig:
-    log_path: str = ""  # "" = stderr
+    log_path: str = "~/.sandbox-mcp/audit.log"  # default file; "" = stderr
 
 
 @dataclass(frozen=True)

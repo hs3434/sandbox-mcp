@@ -41,10 +41,11 @@ auto_generate_if_empty = true
 work_home = "~/.sandbox-mcp/workspaces/"
 
 [audit]
-# JSON-line audit log destination.
-#   "" (empty) = write to stderr (default)
+# JSON-line audit log destination. Default: ~/.sandbox-mcp/audit.log
+# (file-backed, enables the sandbox_audit_query self-audit tool).
+#   "" (empty) = write to stderr (sandbox_audit_query will be hidden)
 #   "/path/to/file" = append to that file (parent dirs auto-created)
-log_path = ""
+log_path = "~/.sandbox-mcp/audit.log"
 
 [docker]
 default_image = "debian:stable-slim"
