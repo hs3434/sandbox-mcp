@@ -460,14 +460,16 @@ class SandboxServer:
         path = Path(log_path).expanduser()
         raw_lines = read_tail_lines(path, tail) if path.is_file() else []
         records = list(parse_records(raw_lines))
-        filtered = list(apply_filters(
-            records,
-            action=args.get("action"),
-            machine=args.get("machine"),
-            status=args.get("status"),
-            since=args.get("since"),
-            until=args.get("until"),
-        ))
+        filtered = list(
+            apply_filters(
+                records,
+                action=args.get("action"),
+                machine=args.get("machine"),
+                status=args.get("status"),
+                since=args.get("since"),
+                until=args.get("until"),
+            )
+        )
         total = len(filtered)
         window_end = min(end, total)
         window_start = min(start, total)

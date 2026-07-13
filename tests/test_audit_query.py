@@ -28,6 +28,7 @@ from sandbox_mcp.audit import (
 
 # ---------- read_tail_lines ----------
 
+
 def test_read_tail_lines_returns_all_when_file_shorter_than_n(tmp_path):
     p = tmp_path / "a.log"
     p.write_text("a\nb\nc\n", encoding="utf-8")
@@ -84,6 +85,7 @@ def test_read_tail_lines_handles_binary_gracefully(tmp_path):
 
 # ---------- parse_records ----------
 
+
 def test_parse_records_skips_blank_lines():
     out = list(parse_records(["", "  ", "\n"]))
     assert out == []
@@ -108,6 +110,7 @@ def test_parse_records_skips_malformed(caplog):
 
 
 # ---------- apply_filters ----------
+
 
 def _r(ts, action="shell_exec", machine="dev", status="ok"):
     return {"ts": ts, "action": action, "machine": machine, "status": status}
@@ -158,13 +161,20 @@ def test_apply_filters_combined():
         _r(3.0, action="shell_exec", machine="prod", status="error"),
         _r(4.0, action="file_read", machine="dev", status="error"),
     ]
-    out = list(apply_filters(
-        recs, action="shell_exec", machine="dev", status="error", since=1.5,
-    ))
+    out = list(
+        apply_filters(
+            recs,
+            action="shell_exec",
+            machine="dev",
+            status="error",
+            since=1.5,
+        )
+    )
     assert [r["ts"] for r in out] == [2.0]
 
 
 # ---------- constants ----------
+
 
 def test_default_tail_is_5000():
     assert DEFAULT_TAIL == 5000
@@ -203,10 +213,13 @@ def _call_audit(server, **kwargs):
 
 def test_handler_filters_by_action(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
-    _seed_audit_log(log, [
-        {"ts": 1.0, "machine": "dev", "action": "shell_exec", "status": "ok"},
-        {"ts": 2.0, "machine": "dev", "action": "file_read", "status": "ok"},
-    ])
+    _seed_audit_log(
+        log,
+        [
+            {"ts": 1.0, "machine": "dev", "action": "shell_exec", "status": "ok"},
+            {"ts": 2.0, "machine": "dev", "action": "file_read", "status": "ok"},
+        ],
+    )
     srv = _build_server(monkeypatch, str(log))
     data = _call_audit(srv, action="file_read")
     assert data["total"] == 1
@@ -215,11 +228,14 @@ def test_handler_filters_by_action(monkeypatch, tmp_path):
 
 def test_handler_combined_filters(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
-    _seed_audit_log(log, [
-        {"ts": 1.0, "machine": "dev", "action": "shell_exec", "status": "ok"},
-        {"ts": 2.0, "machine": "dev", "action": "shell_exec", "status": "error"},
-        {"ts": 3.0, "machine": "prod", "action": "shell_exec", "status": "error"},
-    ])
+    _seed_audit_log(
+        log,
+        [
+            {"ts": 1.0, "machine": "dev", "action": "shell_exec", "status": "ok"},
+            {"ts": 2.0, "machine": "dev", "action": "shell_exec", "status": "error"},
+            {"ts": 3.0, "machine": "prod", "action": "shell_exec", "status": "error"},
+        ],
+    )
     srv = _build_server(monkeypatch, str(log))
     data = _call_audit(srv, machine="dev", status="error")
     assert data["total"] == 1
@@ -228,10 +244,13 @@ def test_handler_combined_filters(monkeypatch, tmp_path):
 
 def test_handler_window_pagination(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
-    _seed_audit_log(log, [
-        {"ts": float(i), "machine": "dev", "action": "shell_exec", "status": "ok"}
-        for i in range(10)
-    ])
+    _seed_audit_log(
+        log,
+        [
+            {"ts": float(i), "machine": "dev", "action": "shell_exec", "status": "ok"}
+            for i in range(10)
+        ],
+    )
     srv = _build_server(monkeypatch, str(log))
     page1 = _call_audit(srv, start=0, end=4)
     page2 = _call_audit(srv, start=4, end=8)
@@ -246,9 +265,9 @@ def test_handler_window_pagination(monkeypatch, tmp_path):
 
 def test_handler_end_defaults_to_start_plus_100(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
-    _seed_audit_log(log, [
-        {"ts": float(i), "machine": "dev", "action": "x", "status": "ok"} for i in range(5)
-    ])
+    _seed_audit_log(
+        log, [{"ts": float(i), "machine": "dev", "action": "x", "status": "ok"} for i in range(5)]
+    )
     srv = _build_server(monkeypatch, str(log))
     data = _call_audit(srv, start=2)
     assert data["window"] == [2, 5]
@@ -281,9 +300,11 @@ def test_handler_skips_malformed_lines(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
-        json.dumps({"ts": 1.0, "machine": "x", "action": "good", "status": "ok"}) + "\n"
+        json.dumps({"ts": 1.0, "machine": "x", "action": "good", "status": "ok"})
+        + "\n"
         + "garbage\n"
-        + json.dumps({"ts": 2.0, "machine": "x", "action": "good", "status": "ok"}) + "\n",
+        + json.dumps({"ts": 2.0, "machine": "x", "action": "good", "status": "ok"})
+        + "\n",
         encoding="utf-8",
     )
     srv = _build_server(monkeypatch, str(log))
