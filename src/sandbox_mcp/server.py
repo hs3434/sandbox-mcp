@@ -48,8 +48,17 @@ import logging
 import os
 import secrets
 import time
+from pathlib import Path
 
-from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
+from sandbox_mcp.audit import (
+    DEFAULT_AUDIT_LOGGER,
+    DEFAULT_TAIL,
+    AuditLogger,
+    apply_filters,
+    parse_records,
+    read_tail_lines,
+    reset_default_logger,
+)
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
 from sandbox_mcp.config import load as _load_config
@@ -346,7 +355,9 @@ class SandboxServer:
             duration_ms = int((time.monotonic() - start) * 1000)
             machine = arguments.get("machine") if isinstance(arguments, dict) else None
             details = {
-                k: v for k, v in (arguments or {}).items() if k != "machine" and k != "action"
+                k: v
+                for k, v in (arguments or {}).items()
+                if k not in {"machine", "action", "status"}
             }
             self.audit.record(
                 machine=machine,
@@ -433,6 +444,40 @@ class SandboxServer:
             output_mode=args.get("output_mode", "content"),
             context=args.get("context", 0),
         )
+
+    # ---- audit_query handler ----
+
+    def _handle_sandbox_audit_query(self, args):
+        cfg = _load_config()
+        log_path = cfg.audit.log_path
+        if not log_path:
+            return {"error": "audit log is not file-backed"}
+
+        tail = int(args.get("tail", DEFAULT_TAIL))
+        start = int(args.get("start", 0))
+        end = int(args.get("end", start + 100))
+
+        path = Path(log_path).expanduser()
+        raw_lines = read_tail_lines(path, tail) if path.is_file() else []
+        records = list(parse_records(raw_lines))
+        filtered = list(apply_filters(
+            records,
+            action=args.get("action"),
+            machine=args.get("machine"),
+            status=args.get("status"),
+            since=args.get("since"),
+            until=args.get("until"),
+        ))
+        total = len(filtered)
+        window_end = min(end, total)
+        window_start = min(start, total)
+
+        return {
+            "records": filtered[window_start:window_end],
+            "total": total,
+            "tail_size": len(raw_lines),
+            "window": [window_start, window_end],
+        }
 
     # ---- sandbox_env handler ----
 
