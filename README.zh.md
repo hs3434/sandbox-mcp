@@ -87,8 +87,9 @@ transport = "streamable-http"
 [storage]               # 持久化 workspace 目录
 work_home = "~/.sandbox-mcp/workspaces/"
 
-[audit]                 # JSON-line 审计日志
-log_path = ""           # "" = stderr；填文件路径则追加到文件
+[audit]                 # SQLite 审计日志（每次工具调用一行）
+log_path = "~/.sandbox-mcp/audit.db"
+                        # "" = stderr（隐藏 sandbox_audit_query）；文件 = 启用查询工具
 
 [docker]                # 容器默认设置
 container_name_prefix = "sandbox-"
@@ -118,7 +119,7 @@ default_search_limit = 50
 ```bash
 SANDBOX_MCP_SERVER_PORT=9000 sandbox-mcp-http
 SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX="box-" sandbox-mcp
-SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
+SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.db sandbox-mcp
 ```
 
 `work_home` 目录会自动创建。`docker_run` 被调用时，会在 `work_home/<机器名>/`
@@ -181,6 +182,7 @@ Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTT
 | `sandbox_file_patch` | 模糊匹配的定向编辑 |
 | `sandbox_file_search` | ripgrep 内容搜索 + glob 文件搜索 |
 | `sandbox_env` | 渐进式发现：`default_set`, `shell_*`, `docker_*`, `ssh_*` |
+| `sandbox_audit_query` | 读取审计日志（过滤 + 分页）—— 仅当 `[audit] log_path` 非空时暴露 |
 
 ## sandbox_env 操作
 

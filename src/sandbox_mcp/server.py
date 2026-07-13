@@ -48,8 +48,15 @@ import logging
 import os
 import secrets
 import time
+from pathlib import Path
 
-from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER, AuditLogger, reset_default_logger
+from sandbox_mcp.audit import (
+    DEFAULT_AUDIT_LOGGER,
+    DEFAULT_TAIL,
+    AuditLogger,
+    query_audit,
+    reset_default_logger,
+)
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
 from sandbox_mcp.config import load as _load_config
@@ -255,6 +262,29 @@ TOOL_DEFINITIONS = [
 ]
 
 
+_AUDIT_QUERY_TOOL_DEFINITION = {
+    "name": "sandbox_audit_query",
+    "description": (
+        "Query the audit log (read-only). Reads at most `tail` lines from "
+        "the end of the file; filters apply within that tail; `start`/`end` "
+        "page over the filtered results."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "tail": {"type": "integer", "default": 5000, "minimum": 1, "maximum": 100000},
+            "start": {"type": "integer", "default": 0, "minimum": 0},
+            "end": {"type": "integer", "default": 100, "minimum": 1},
+            "action": {"type": "string"},
+            "machine": {"type": "string"},
+            "status": {"type": "string"},
+            "since": {"type": "number"},
+            "until": {"type": "number"},
+        },
+    },
+}
+
+
 class ToolDef:
     def __init__(self, name, description, inputSchema):
         self.name = name
@@ -290,7 +320,11 @@ class SandboxServer:
             logger.exception("startup bootstrap: docker_ps failed")
 
     def list_tools(self):
-        return [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
+        tools = [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
+        if _load_config().audit.log_path:
+            t = _AUDIT_QUERY_TOOL_DEFINITION
+            tools.append(ToolDef(t["name"], t["description"], t["inputSchema"]))
+        return tools
 
     def call_tool(self, name, arguments):
         handler = getattr(self, f"_handle_{name}", None)
@@ -317,17 +351,27 @@ class SandboxServer:
             ]
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
-            machine = arguments.get("machine") if isinstance(arguments, dict) else None
-            details = {
-                k: v for k, v in (arguments or {}).items() if k != "machine" and k != "action"
-            }
-            self.audit.record(
-                machine=machine,
-                action=name,
-                status=status,
-                duration_ms=duration_ms,
-                **details,
-            )
+            # Querying the audit log shouldn't pollute it.
+            if name != "sandbox_audit_query":
+                arguments = arguments or {}
+                # ``sandbox_env`` is a meta-tool: the real action lives
+                # in ``arguments["action"]``.  For every other tool the
+                # tool name IS the action.  ``machine`` is the only
+                # argument promoted to a top-level indexed column.
+                if name == "sandbox_env":
+                    action = arguments.get("action", name)
+                    details = {k: v for k, v in arguments.items() if k != "action"}
+                else:
+                    action = name
+                    details = {k: v for k, v in arguments.items() if k != "machine"}
+                machine = arguments.get("machine")
+                self.audit.record(
+                    machine=machine,
+                    action=action,
+                    status=status,
+                    duration_ms=duration_ms,
+                    details=details,
+                )
 
     def _resolve_machine(self, arguments):
         return self.machines.resolve_machine(arguments.get("machine"))
@@ -407,6 +451,43 @@ class SandboxServer:
             context=args.get("context", 0),
         )
 
+    # ---- audit_query handler ----
+
+    def _handle_sandbox_audit_query(self, args):
+        cfg = _load_config()
+        log_path = cfg.audit.log_path
+        if not log_path:
+            return {"error": "audit log is not file-backed"}
+
+        start = int(args.get("start", 0))
+        raw_end = args.get("end")
+        end = int(raw_end) if raw_end is not None else None
+
+        path = Path(log_path).expanduser()
+        result = query_audit(
+            path,
+            tail=int(args.get("tail", DEFAULT_TAIL)),
+            start=start,
+            end=end,
+            action=args.get("action"),
+            machine=args.get("machine"),
+            status=args.get("status"),
+            since=args.get("since"),
+            until=args.get("until"),
+        )
+        total = result["total"]
+        # `end` may have been defaulted inside ``query_audit`` (start + 100);
+        # re-derive the effective end so the window reflects the call.
+        effective_end = end if end is not None else start + 100
+        window_end = min(effective_end, total)
+        window_start = min(start, total)
+        return {
+            "records": result["records"],
+            "total": total,
+            "tail_size": result["tail_size"],
+            "window": [window_start, window_end],
+        }
+
     # ---- sandbox_env handler ----
 
     def _handle_sandbox_env(self, args):
@@ -435,6 +516,11 @@ def main(argv: list[str] | None = None):
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    audit_log_path = _load_config().audit.log_path
+    if audit_log_path:
+        logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
+    else:
+        logger.warning("audit: log_path=<empty> (query tool disabled)")
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
 
@@ -527,6 +613,11 @@ def main_http(argv: list[str] | None = None):
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
+    audit_log_path = _load_config().audit.log_path
+    if audit_log_path:
+        logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
+    else:
+        logger.warning("audit: log_path=<empty> (query tool disabled)")
     logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
     logger.info("Tokens file: %s (hot-reloaded per request)", tokens_file)
 
