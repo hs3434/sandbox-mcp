@@ -459,6 +459,13 @@ class SandboxServer:
         start = int(args.get("start", 0))
         end = int(args.get("end", start + 100))
 
+        if start < 0:
+            raise ValueError(f"start must be >= 0, got {start}")
+        if end < 1:
+            raise ValueError(f"end must be >= 1, got {end}")
+        if end <= start:
+            raise ValueError(f"end ({end}) must be > start ({start})")
+
         path = Path(log_path).expanduser()
         raw_lines = read_tail_lines(path, tail) if path.is_file() else []
         records = list(parse_records(raw_lines))

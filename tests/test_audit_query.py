@@ -325,3 +325,64 @@ def test_handler_skips_malformed_lines(monkeypatch, tmp_path):
     srv = _build_server(monkeypatch, str(log))
     data = _call_audit(srv)
     assert data["total"] == 2
+
+
+def test_handler_rejects_negative_start(monkeypatch, tmp_path):
+    log = tmp_path / "audit.log"
+    _seed_audit_log(log, [{"ts": 1.0, "machine": "x", "action": "y", "status": "ok"}])
+    srv = _build_server(monkeypatch, str(log))
+    with pytest.raises(ValueError, match=r"start must be"):
+        srv._handle_sandbox_audit_query({"start": -1})
+
+
+def test_handler_rejects_non_positive_end(monkeypatch, tmp_path):
+    log = tmp_path / "audit.log"
+    _seed_audit_log(log, [{"ts": 1.0, "machine": "x", "action": "y", "status": "ok"}])
+    srv = _build_server(monkeypatch, str(log))
+    with pytest.raises(ValueError, match=r"end must be"):
+        srv._handle_sandbox_audit_query({"end": 0})
+
+
+def test_handler_rejects_inverted_window(monkeypatch, tmp_path):
+    log = tmp_path / "audit.log"
+    _seed_audit_log(
+        log,
+        [{"ts": float(i), "machine": "x", "action": "y", "status": "ok"} for i in range(5)],
+    )
+    srv = _build_server(monkeypatch, str(log))
+    with pytest.raises(ValueError, match=r"end .* must be > start"):
+        srv._handle_sandbox_audit_query({"start": 4, "end": 2})
+
+
+def test_handler_rejects_equal_window(monkeypatch, tmp_path):
+    log = tmp_path / "audit.log"
+    _seed_audit_log(
+        log,
+        [{"ts": float(i), "machine": "x", "action": "y", "status": "ok"} for i in range(5)],
+    )
+    srv = _build_server(monkeypatch, str(log))
+    with pytest.raises(ValueError, match=r"end .* must be > start"):
+        srv._handle_sandbox_audit_query({"start": 3, "end": 3})
+
+
+def test_handler_no_caching_sees_new_records(monkeypatch, tmp_path):
+    """Records emitted between two queries must be visible to the second (no cache)."""
+    from sandbox_mcp.audit import AuditLogger
+
+    log = tmp_path / "audit.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    # Empty log initially
+    log.write_text("", encoding="utf-8")
+    srv = _build_server(monkeypatch, str(log))
+
+    # First query: empty
+    data1 = _call_audit(srv)
+    assert data1["total"] == 0
+
+    # Append a record via AuditLogger (the writer used by call_tool)
+    AuditLogger(sink=str(log)).record(machine="x", action="between")
+
+    # Second query: must see the new record
+    data2 = _call_audit(srv)
+    assert data2["total"] == 1
+    assert data2["records"][0]["action"] == "between"
