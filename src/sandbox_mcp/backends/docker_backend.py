@@ -261,7 +261,7 @@ class DockerBackend(Backend):
         # into a sandboxed container.
         ports = kwargs.get("ports", []) or []
         env = kwargs.get("env", {}) or {}
-        workdir = kwargs.get("workdir", docker_cfg.default_workdir)
+        workdir = kwargs.get("workdir", "/workspace")
 
         # Container names are the bare machine name.  Namespace is
         # enforced by the ``sandbox-mcp.managed=true`` docker label,

@@ -22,7 +22,7 @@ Settings are read in this priority order (highest first):
 2. ``~/.sandbox-mcp/config.toml`` (path overridable via ``SANDBOX_MCP_CONFIG``).
 3. Built-in defaults declared as :class:`dataclasses.dataclass` fields below.
 
-For a commented reference of every key, copy ``config.example.toml``
+For a commented reference of every key, copy ``config/config.example.toml``
 from the repo root to ``~/.sandbox-mcp/config.toml``.
 """
 
@@ -83,7 +83,6 @@ class AuditConfig:
 @dataclass(frozen=True)
 class DockerConfig:
     default_image: str = "debian:stable-slim"
-    default_workdir: str = "/workspace"
     restart_policy_name: str = "on-failure"
     restart_max_retry_count: int = 3
     write_tmp_prefix: str = "/tmp/.sandbox-mcp-write-"
@@ -158,7 +157,6 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "storage_work_home": ("storage", "work_home", str),
         "audit_log_path": ("audit", "log_path", str),
         "docker_default_image": ("docker", "default_image", str),
-        "docker_default_workdir": ("docker", "default_workdir", str),
         "docker_restart_policy_name": ("docker", "restart_policy_name", str),
         "docker_restart_max_retry_count": ("docker", "restart_max_retry_count", int),
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
@@ -243,7 +241,9 @@ def get_work_home() -> Path:
 
 
 def get_work_dir(name: str) -> Path:
-    """Return the per-machine workspace directory, creating it if needed."""
-    wd = get_work_home() / name
-    wd.mkdir(parents=True, exist_ok=True)
-    return wd
+    """Return the per-machine workspace directory path for the Docker daemon.
+
+    The directory is NOT created here -- the Docker daemon auto-creates it
+    when bind-mounting on container creation.
+    """
+    return get_work_home() / name

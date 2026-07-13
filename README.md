@@ -81,7 +81,7 @@ sandbox-mcp reads config in this priority order (highest wins):
    `--config PATH` / `SANDBOX_MCP_CONFIG`
 4. **Built-in defaults** (declared in `src/sandbox_mcp/config.py`)
 
-To customize, copy [`config.example.toml`](config.example.toml) from the
+To customize, copy [`config/config.example.toml`](config/config.example.toml) from the
 repo root to `~/.sandbox-mcp/config.toml` and edit what you need.
 Leaving it in place means all defaults are used.
 
@@ -102,7 +102,6 @@ log_path = ""           # "" = stderr; set to a file path to append
 [docker]                # container defaults
 container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
-default_workdir = "/workspace"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 
@@ -315,7 +314,7 @@ cert_path = "/etc/sandbox-mcp/docker-certs"
 ```
 
 URL scheme (`unix://` / `tcp://` / `ssh://`) selects transport.  See
-[`config.example.toml`](config.example.toml) for all options.
+[`config/config.example.toml`](config/config.example.toml) for all options.
 
 ## HTTP authentication
 

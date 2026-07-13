@@ -37,10 +37,14 @@ auto_generate_if_empty = true
 
 [storage]
 # Root directory for per-machine persistent workspaces.
-# When docker_run creates a container named "dev", sandbox-mcp will:
-#   1. mkdir work_home/dev/
-#   2. bind-mount it to /workspace inside the container
-# Agent works in /workspace and never sees the host path.
+# When docker_run creates a container named "dev", sandbox-mcp tells the
+# Docker daemon to bind-mount work_home/dev/ to /workspace inside the
+# container.  The daemon auto-creates the directory if it doesn't exist.
+#
+# When running sandbox-mcp inside a container (Docker socket mount), set
+# this to the HOST-side path -- the Docker daemon resolves it on the host,
+# not inside the container.
+# Overridable via $SANDBOX_MCP_STORAGE_WORK_HOME.
 work_home = "~/.sandbox-mcp/workspaces/"
 
 [audit]
@@ -51,7 +55,6 @@ log_path = ""
 
 [docker]
 default_image = "debian:stable-slim"
-default_workdir = "/workspace"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 

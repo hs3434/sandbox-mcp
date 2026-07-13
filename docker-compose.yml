@@ -1,0 +1,86 @@
+# sandbox-mcp Docker Compose deployment template
+#
+# Quick start
+# -----------
+#   1. Generate an auth token:
+#        mkdir -p config
+#        openssl rand -base64 48 > config/auth_tokens
+#        chmod 600 config/auth_tokens
+#
+#   2. (Optional) Customise settings in config.toml:
+#        cp config/config.example.toml config/config.toml
+#        # edit config/config.toml as needed
+#
+#   3. (Optional) Override deployment-specific values via .env:
+#        cat > .env <<EOF
+#        SANDBOX_MCP_PORT=8010                    # host port to expose
+#        WORKSPACE_HOST_DIR=/data/sandbox-ws      # host path for workspace dirs
+#        DOCKER_SOCK_PATH=/var/run/docker.sock    # host docker socket path
+#        # SANDBOX_MCP_DOCKER_HOST=tcp://10.0.5.20:2376  # remote daemon (no socket mount)
+#        EOF
+#
+#   4. Start the service:
+#        docker compose up -d
+#
+#   5. Verify startup:
+#        docker compose logs -f sandbox-mcp
+#
+#   6. Connect your MCP client:
+#        URL:   http://localhost:${SANDBOX_MCP_PORT:-8010}/mcp
+#        Token: cat config/auth_tokens
+#
+# Configuration
+# -------------
+# Static settings (server, auth, audit, docker defaults, etc.) go in
+# config/config.toml -- see config/config.example.toml for a full reference.
+# Only deployment-specific values that need .env flexibility are kept
+# as environment variables below.
+#
+# Workspace path note
+# -------------------
+# sandbox-mcp runs inside this container but manages Docker containers via the
+# HOST Docker daemon (socket mount).  When it creates a sandbox container, it
+# tells the daemon to bind-mount:
+#   <work_home_host>/<machine>  ->  /workspace  (inside the sandbox container)
+#
+# WORKSPACE_HOST_DIR is the host-side path.  The Docker daemon auto-creates
+# subdirectories on the host as needed, so no volume mount is required here.
+
+services:
+  sandbox-mcp:
+    build: .
+    image: sandbox-mcp:latest
+    container_name: sandbox-mcp
+    restart: unless-stopped
+
+    ports:
+      - "${SANDBOX_MCP_PORT:-8010}:8010"
+
+    environment:
+      # Workspace path on the host.  The Docker daemon resolves this on the
+      # host and auto-creates subdirectories per sandbox machine.
+      SANDBOX_MCP_STORAGE_WORK_HOME: "${WORKSPACE_HOST_DIR:-/var/lib/sandbox-mcp/workspaces}"
+
+      # Docker daemon connection. Empty = use the mounted socket.
+      # For remote daemons: "tcp://host:port" and remove the socket mount below.
+      SANDBOX_MCP_DOCKER_HOST: "${SANDBOX_MCP_DOCKER_HOST:-}"
+
+    volumes:
+      # Docker socket - lets sandbox-mcp manage containers on the host.
+      # For remote Docker daemons (TCP/TLS), remove this mount and set
+      # SANDBOX_MCP_DOCKER_HOST above.
+      - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:${DOCKER_SOCK_PATH:-/var/run/docker.sock}"
+
+      # Config directory: auth_tokens, config.toml, audit.log
+      - ./config:/home/sandbox/.sandbox-mcp
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - 'import socket; socket.create_connection(("localhost", 8010), timeout=3).close()'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

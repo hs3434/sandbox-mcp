@@ -77,7 +77,7 @@ sandbox-mcp 按以下优先级读配置（从高到低）：
 3. **配置文件** —— 默认 `~/.sandbox-mcp/config.toml`，可用 `--config PATH` 或 `SANDBOX_MCP_CONFIG` 覆盖
 4. **内置默认值**（在 `src/sandbox_mcp/config.py` 里声明）
 
-要自定义，把 [`config.example.toml`](config.example.toml) 拷贝到
+要自定义，把 [`config/config.example.toml`](config/config.example.toml) 拷贝到
 `~/.sandbox-mcp/config.toml` 后改需要的字段。保持默认就什么都不用做。
 
 主要配置项：
@@ -97,7 +97,6 @@ log_path = ""           # "" = stderr；填文件路径则追加到文件
 [docker]                # 容器默认设置
 container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
-default_workdir = "/workspace"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 
@@ -298,7 +297,7 @@ cert_path = "/etc/sandbox-mcp/docker-certs"
 ```
 
 URL 协议头(`unix://` / `tcp://` / `ssh://`)决定传输方式。
-完整选项见 [`config.example.toml`](config.example.toml)。
+完整选项见 [`config/config.example.toml`](config/config.example.toml)。
 
 ## HTTP 鉴权
 

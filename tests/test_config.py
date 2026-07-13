@@ -119,15 +119,23 @@ future_knob = "ignored"
     assert not hasattr(cfg.server, "future_knob")
 
 
-def test_get_work_dir_creates_directory(monkeypatch, tmp_path):
+def test_get_work_dir_returns_path(monkeypatch, tmp_path):
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     wd = get_work_dir("mybox")
     assert wd == (tmp_path / "mybox").resolve()
-    assert wd.is_dir()
+    assert not wd.exists()
 
 
 def test_get_work_home_default(monkeypatch):
     assert get_work_home() == (Path.home() / ".sandbox-mcp" / "workspaces").resolve()
+
+
+def test_get_work_dir_uses_env_override(monkeypatch, tmp_path):
+    host_dir = tmp_path / "host-ws"
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(host_dir))
+    wd = get_work_dir("mybox")
+    assert wd == host_dir.resolve() / "mybox"
+    assert not wd.exists()
 
 
 def test_storage_work_home_expands_tilde(monkeypatch):
@@ -137,7 +145,7 @@ def test_storage_work_home_expands_tilde(monkeypatch):
 
 
 def test_repo_example_matches_dataclass_defaults():
-    """Drift guard: every key in config.example.toml must match the
+    """Drift guard: every key in config/config.example.toml must match the
     dataclass field defaults.  Catches the case where someone bumps a
     default in config.py and forgets to update the human-facing
     reference (or vice versa).
@@ -148,7 +156,9 @@ def test_repo_example_matches_dataclass_defaults():
     from sandbox_mcp.config import AppConfig
 
     repo_root = Path(__file__).resolve().parent.parent
-    parsed = tomllib.loads((repo_root / "config.example.toml").read_text(encoding="utf-8"))
+    parsed = tomllib.loads(
+        (repo_root / "config" / "config.example.toml").read_text(encoding="utf-8")
+    )
 
     expected: dict[str, dict[str, object]] = {}
     for section_name, section_obj in AppConfig().__dict__.items():
@@ -165,7 +175,7 @@ def test_repo_example_matches_dataclass_defaults():
         expected[section_name] = section_dict
 
     assert parsed == expected, (
-        f"config.example.toml does not match AppConfig() defaults.\n"
+        f"config/config.example.toml does not match AppConfig() defaults.\n"
         f"  parsed: {parsed}\n  expected: {expected}"
     )
 
@@ -177,10 +187,12 @@ def test_repo_example_uses_known_sections():
     from sandbox_mcp.config import AppConfig
 
     repo_root = Path(__file__).resolve().parent.parent
-    parsed = tomllib.loads((repo_root / "config.example.toml").read_text(encoding="utf-8"))
+    parsed = tomllib.loads(
+        (repo_root / "config" / "config.example.toml").read_text(encoding="utf-8")
+    )
     valid_sections = set(AppConfig().__dict__.keys())
     assert set(parsed.keys()) == valid_sections, (
-        f"Unknown sections in config.example.toml: "
+        f"Unknown sections in config/config.example.toml: "
         f"{set(parsed.keys()) - valid_sections}; "
         f"missing sections: {valid_sections - set(parsed.keys())}"
     )
