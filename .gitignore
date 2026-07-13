@@ -13,3 +13,4 @@ uv.lock
 config/auth_tokens
 config/config.toml
 config/audit.log
+.worktrees/
