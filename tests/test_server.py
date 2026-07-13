@@ -99,3 +99,58 @@ def test_server_bootstraps_registry_via_docker_ps(monkeypatch):
     mock_docker.list_managed_containers.assert_called_once()
     # No create() was ever invoked — adoption only.
     mock_docker.create.assert_not_called()
+
+
+def test_audit_records_inner_action_for_sandbox_env(monkeypatch, tmp_path):
+    """``sandbox_env`` is a meta-tool: the inner ``action`` arg is the
+    real action and should land in the indexed ``action`` column, not
+    the wrapper tool name ``"sandbox_env"``.
+    """
+    import sqlite3
+
+    from sandbox_mcp.audit import AuditLogger
+
+    db = tmp_path / "audit.db"
+    monkeypatch.setenv("SANDBOX_MCP_AUDIT_LOG_PATH", str(db))
+    with (
+        patch("sandbox_mcp.server.DockerBackend"),
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        srv = SandboxServer(audit=AuditLogger(sink=str(db)))
+    # Trigger an audit entry by calling sandbox_env(action="status").
+    srv.call_tool("sandbox_env", {"action": "status"})
+
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT action, details FROM audit").fetchall()
+    assert len(rows) == 1
+    action, details_json = rows[0]
+    # Inner action is recorded at the top column level.
+    assert action == "status"
+    # ``action`` is filtered out of details (already promoted).
+    assert "action" not in (details_json or "{}")
+
+
+def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
+    """Querying the audit log must not pollute it with self-references."""
+    import sqlite3
+
+    from sandbox_mcp.audit import AuditLogger
+
+    db = tmp_path / "audit.db"
+    # Pre-existing row from before the query.
+    AuditLogger(sink=str(db)).record(machine=None, action="pre_existing")
+
+    monkeypatch.setenv("SANDBOX_MCP_AUDIT_LOG_PATH", str(db))
+    with (
+        patch("sandbox_mcp.server.DockerBackend"),
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        srv = SandboxServer(audit=AuditLogger(sink=str(db)))
+
+    # Make a query through the tool.
+    srv.call_tool("sandbox_audit_query", {})
+
+    with sqlite3.connect(db) as conn:
+        actions = [r[0] for r in conn.execute("SELECT action FROM audit").fetchall()]
+    # Only the pre-existing row is present; the query did not record itself.
+    assert actions == ["pre_existing"]

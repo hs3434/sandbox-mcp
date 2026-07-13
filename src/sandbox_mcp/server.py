@@ -285,12 +285,6 @@ _AUDIT_QUERY_TOOL_DEFINITION = {
 }
 
 
-# Names that ``AuditLogger.record`` reserves as explicit kwargs. These must
-# never be propagated via ``**details`` (would raise TypeError). Update this
-# set whenever ``AuditLogger.record`` gains a new explicit kwarg.
-_AUDIT_RECORD_KWARGS: frozenset[str] = frozenset({"machine", "action", "status", "duration_ms"})
-
-
 class ToolDef:
     def __init__(self, name, description, inputSchema):
         self.name = name
@@ -357,15 +351,27 @@ class SandboxServer:
             ]
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
-            machine = arguments.get("machine") if isinstance(arguments, dict) else None
-            details = {k: v for k, v in (arguments or {}).items() if k not in _AUDIT_RECORD_KWARGS}
-            self.audit.record(
-                machine=machine,
-                action=name,
-                status=status,
-                duration_ms=duration_ms,
-                **details,
-            )
+            # Querying the audit log shouldn't pollute it.
+            if name != "sandbox_audit_query":
+                arguments = arguments or {}
+                # ``sandbox_env`` is a meta-tool: the real action lives
+                # in ``arguments["action"]``.  For every other tool the
+                # tool name IS the action.  ``machine`` is the only
+                # argument promoted to a top-level indexed column.
+                if name == "sandbox_env":
+                    action = arguments.get("action", name)
+                    details = {k: v for k, v in arguments.items() if k != "action"}
+                else:
+                    action = name
+                    details = {k: v for k, v in arguments.items() if k != "machine"}
+                machine = arguments.get("machine")
+                self.audit.record(
+                    machine=machine,
+                    action=action,
+                    status=status,
+                    duration_ms=duration_ms,
+                    details=details,
+                )
 
     def _resolve_machine(self, arguments):
         return self.machines.resolve_machine(arguments.get("machine"))
