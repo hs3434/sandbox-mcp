@@ -19,8 +19,8 @@ import json
 import pytest
 
 from sandbox_mcp.audit import (
-    _DEFAULT_TAIL,
-    _MAX_TAIL,
+    DEFAULT_TAIL,
+    MAX_TAIL,
     apply_filters,
     parse_records,
     read_tail_lines,
@@ -64,13 +64,13 @@ def test_read_tail_lines_rejects_over_cap(tmp_path):
     p = tmp_path / "a.log"
     p.write_text("x\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"tail must be in"):
-        read_tail_lines(p, _MAX_TAIL + 1)
+        read_tail_lines(p, MAX_TAIL + 1)
 
 
 def test_read_tail_lines_accepts_cap(tmp_path):
     p = tmp_path / "a.log"
     p.write_text("x\n", encoding="utf-8")
-    assert read_tail_lines(p, _MAX_TAIL) == ["x\n"]
+    assert read_tail_lines(p, MAX_TAIL) == ["x\n"]
 
 
 def test_read_tail_lines_handles_binary_gracefully(tmp_path):
@@ -153,19 +153,22 @@ def test_apply_filters_until_exclusive():
 
 def test_apply_filters_combined():
     recs = [
-        _r(1.0, action="shell_exec", machine="dev"),
-        _r(2.0, action="file_read", machine="dev"),
-        _r(3.0, action="shell_exec", machine="prod"),
+        _r(1.0, action="shell_exec", machine="dev", status="ok"),
+        _r(2.0, action="shell_exec", machine="dev", status="error"),
+        _r(3.0, action="shell_exec", machine="prod", status="error"),
+        _r(4.0, action="file_read", machine="dev", status="error"),
     ]
-    out = list(apply_filters(recs, action="shell_exec", machine="dev", since=1.5))
-    assert [r["ts"] for r in out] == []
+    out = list(apply_filters(
+        recs, action="shell_exec", machine="dev", status="error", since=1.5,
+    ))
+    assert [r["ts"] for r in out] == [2.0]
 
 
 # ---------- constants ----------
 
 def test_default_tail_is_5000():
-    assert _DEFAULT_TAIL == 5000
+    assert DEFAULT_TAIL == 5000
 
 
 def test_max_tail_is_100000():
-    assert _MAX_TAIL == 100_000
+    assert MAX_TAIL == 100_000

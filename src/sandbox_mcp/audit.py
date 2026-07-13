@@ -153,18 +153,18 @@ def disable_audit() -> None:
 logger = logging.getLogger(__name__)
 
 # Public bounds for ``sandbox_audit_query``'s ``tail`` parameter.
-_DEFAULT_TAIL = 5_000
-_MAX_TAIL = 100_000
+DEFAULT_TAIL = 5_000
+MAX_TAIL = 100_000
 
 
 def read_tail_lines(path: Path, n: int) -> list[str]:
     """Read at most ``n`` lines from the end of ``path``.
 
-    Raises ``ValueError`` if ``n`` is outside ``(0, _MAX_TAIL]``.
+    Raises ``ValueError`` if ``n`` is outside ``(0, MAX_TAIL]``.
     Binary-safe via ``errors="replace"``.
     """
-    if n <= 0 or n > _MAX_TAIL:
-        raise ValueError(f"tail must be in (0, {_MAX_TAIL}], got {n}")
+    if n <= 0 or n > MAX_TAIL:
+        raise ValueError(f"tail must be in (0, {MAX_TAIL}], got {n}")
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return list(deque(f, maxlen=n))
 

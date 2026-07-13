@@ -16,7 +16,7 @@
 
 | File | Responsibility |
 |------|----------------|
-| `src/sandbox_mcp/audit.py` | Add `read_tail_lines`, `parse_records`, `apply_filters`, plus `_MAX_TAIL` / `_DEFAULT_TAIL` constants |
+| `src/sandbox_mcp/audit.py` | Add `read_tail_lines`, `parse_records`, `apply_filters`, plus `MAX_TAIL` / `DEFAULT_TAIL` constants |
 | `src/sandbox_mcp/config.py` | Change `AuditConfig.log_path` default to `"~/.sandbox-mcp/audit.log"` |
 | `src/sandbox_mcp/server.py` | Add `_AUDIT_QUERY_TOOL_DEFINITION` dict, conditional in `list_tools`, `_handle_sandbox_audit_query` method, startup log line in `main` + `main_http` |
 | `config/config.example.toml` | Update `[audit]` section to reflect new default |
@@ -59,8 +59,8 @@ import json
 import pytest
 
 from sandbox_mcp.audit import (
-    _DEFAULT_TAIL,
-    _MAX_TAIL,
+    DEFAULT_TAIL,
+    MAX_TAIL,
     apply_filters,
     parse_records,
     read_tail_lines,
@@ -107,13 +107,13 @@ def test_read_tail_lines_rejects_over_cap(tmp_path):
     p = tmp_path / "a.log"
     p.write_text("x\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"tail must be in"):
-        read_tail_lines(p, _MAX_TAIL + 1)
+        read_tail_lines(p, MAX_TAIL + 1)
 
 
 def test_read_tail_lines_accepts_cap(tmp_path):
     p = tmp_path / "a.log"
     p.write_text("x\n", encoding="utf-8")
-    assert read_tail_lines(p, _MAX_TAIL) == ["x\n"]
+    assert read_tail_lines(p, MAX_TAIL) == ["x\n"]
 
 
 def test_read_tail_lines_handles_binary_gracefully(tmp_path):
@@ -207,11 +207,11 @@ def test_apply_filters_combined():
 # ---------- constants ----------
 
 def test_default_tail_is_5000():
-    assert _DEFAULT_TAIL == 5000
+    assert DEFAULT_TAIL == 5000
 
 
 def test_max_tail_is_100000():
-    assert _MAX_TAIL == 100_000
+    assert MAX_TAIL == 100_000
 ```
 
 ### Step 2: Run the tests to confirm they fail
@@ -241,18 +241,18 @@ Then just before `def disable_audit():`, insert:
 logger = logging.getLogger(__name__)
 
 # Public bounds for ``sandbox_audit_query``'s ``tail`` parameter.
-_DEFAULT_TAIL = 5_000
-_MAX_TAIL = 100_000
+DEFAULT_TAIL = 5_000
+MAX_TAIL = 100_000
 
 
 def read_tail_lines(path: Path, n: int) -> list[str]:
     """Read at most ``n`` lines from the end of ``path``.
 
-    Raises ``ValueError`` if ``n`` is outside ``(0, _MAX_TAIL]``.
+    Raises ``ValueError`` if ``n`` is outside ``(0, MAX_TAIL]``.
     Binary-safe via ``errors="replace"``.
     """
-    if n <= 0 or n > _MAX_TAIL:
-        raise ValueError(f"tail must be in (0, {_MAX_TAIL}], got {n}")
+    if n <= 0 or n > MAX_TAIL:
+        raise ValueError(f"tail must be in (0, {MAX_TAIL}], got {n}")
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return list(deque(f, maxlen=n))
 
@@ -680,7 +680,7 @@ In `src/sandbox_mcp/server.py`, import the new helpers at the top (alongside the
 from sandbox_mcp.audit import (
     DEFAULT_AUDIT_LOGGER,
     AuditLogger,
-    _DEFAULT_TAIL,
+    DEFAULT_TAIL,
     apply_filters,
     parse_records,
     read_tail_lines,
@@ -699,7 +699,7 @@ Then add the handler method just before `def _handle_sandbox_env(self, args):` (
         if not log_path:
             return {"error": "audit log is not file-backed"}
 
-        tail = int(args.get("tail", _DEFAULT_TAIL))
+        tail = int(args.get("tail", DEFAULT_TAIL))
         start = int(args.get("start", 0))
         end = int(args.get("end", start + 100))
 
@@ -962,6 +962,6 @@ Expected: 7 commits (Tasks 1–6 + optional 7), touching roughly:
 | Test plan | Tasks 1, 3, 4 |
 | Migration note | Task 6 (README) |
 
-**Type consistency:** `_AUDIT_QUERY_TOOL_DEFINITION` matches the docstring table; `_DEFAULT_TAIL` is used in both handler and tool schema default. `_MAX_TAIL` is enforced in `read_tail_lines` and reflected in the JSON schema `maximum`.
+**Type consistency:** `_AUDIT_QUERY_TOOL_DEFINITION` matches the docstring table; `DEFAULT_TAIL` is used in both handler and tool schema default. `MAX_TAIL` is enforced in `read_tail_lines` and reflected in the JSON schema `maximum`.
 
 **Placeholder scan:** No "TBD" / "TODO" in steps. All code is concrete.

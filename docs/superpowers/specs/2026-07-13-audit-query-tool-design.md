@@ -137,13 +137,13 @@ In `src/sandbox_mcp/audit.py`:
 from collections import deque
 from pathlib import Path
 
-_MAX_TAIL = 100_000
-_DEFAULT_TAIL = 5_000
+MAX_TAIL = 100_000
+DEFAULT_TAIL = 5_000
 
 
 def read_tail_lines(path: Path, n: int) -> list[str]:
-    if n <= 0 or n > _MAX_TAIL:
-        raise ValueError(f"tail must be in (0, {_MAX_TAIL}], got {n}")
+    if n <= 0 or n > MAX_TAIL:
+        raise ValueError(f"tail must be in (0, {MAX_TAIL}], got {n}")
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return list(deque(f, maxlen=n))
 
@@ -187,7 +187,7 @@ def call_audit_query(self, args):
             "error": "audit log is not file-backed",
         }))]
 
-    tail = int(args.get("tail", _DEFAULT_TAIL))
+    tail = int(args.get("tail", DEFAULT_TAIL))
     start = int(args.get("start", 0))
     end = int(args.get("end", start + 100))
 
