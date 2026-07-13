@@ -266,11 +266,26 @@ def test_handler_window_pagination(monkeypatch, tmp_path):
 def test_handler_end_defaults_to_start_plus_100(monkeypatch, tmp_path):
     log = tmp_path / "audit.log"
     _seed_audit_log(
-        log, [{"ts": float(i), "machine": "dev", "action": "x", "status": "ok"} for i in range(5)]
+        log,
+        [{"ts": float(i), "machine": "dev", "action": "x", "status": "ok"} for i in range(150)],
     )
     srv = _build_server(monkeypatch, str(log))
-    data = _call_audit(srv, start=2)
-    assert data["window"] == [2, 5]
+    data = _call_audit(srv, start=20)  # end omitted → end = 20 + 100 = 120
+    assert data["window"] == [20, 120]
+    assert len(data["records"]) == 100
+
+
+def test_handler_tail_param_truncates(monkeypatch, tmp_path):
+    """End-to-end: ``tail`` threaded through the handler limits the read window."""
+    log = tmp_path / "audit.log"
+    _seed_audit_log(
+        log,
+        [{"ts": float(i), "machine": "x", "action": "y", "status": "ok"} for i in range(100)],
+    )
+    srv = _build_server(monkeypatch, str(log))
+    data = _call_audit(srv, tail=10)
+    assert data["tail_size"] == 10
+    assert data["total"] == 10
 
 
 def test_handler_missing_file_returns_empty(monkeypatch, tmp_path):

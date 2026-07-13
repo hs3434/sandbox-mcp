@@ -287,6 +287,12 @@ _AUDIT_QUERY_TOOL_DEFINITION = {
 }
 
 
+# Names that ``AuditLogger.record`` reserves as explicit kwargs. These must
+# never be propagated via ``**details`` (would raise TypeError). Update this
+# set whenever ``AuditLogger.record`` gains a new explicit kwarg.
+_AUDIT_RECORD_KWARGS: frozenset[str] = frozenset({"machine", "action", "status", "duration_ms"})
+
+
 class ToolDef:
     def __init__(self, name, description, inputSchema):
         self.name = name
@@ -354,11 +360,7 @@ class SandboxServer:
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
             machine = arguments.get("machine") if isinstance(arguments, dict) else None
-            details = {
-                k: v
-                for k, v in (arguments or {}).items()
-                if k not in {"machine", "action", "status"}
-            }
+            details = {k: v for k, v in (arguments or {}).items() if k not in _AUDIT_RECORD_KWARGS}
             self.audit.record(
                 machine=machine,
                 action=name,
