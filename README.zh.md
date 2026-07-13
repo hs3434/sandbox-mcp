@@ -88,7 +88,8 @@ transport = "streamable-http"
 work_home = "~/.sandbox-mcp/workspaces/"
 
 [audit]                 # JSON-line 审计日志
-log_path = ""           # "" = stderr；填文件路径则追加到文件
+log_path = "~/.sandbox-mcp/audit.log"
+                        # "" = stderr（隐藏 sandbox_audit_query）；文件 = 启用查询工具
 
 [docker]                # 容器默认设置
 container_name_prefix = "sandbox-"
@@ -181,6 +182,7 @@ Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTT
 | `sandbox_file_patch` | 模糊匹配的定向编辑 |
 | `sandbox_file_search` | ripgrep 内容搜索 + glob 文件搜索 |
 | `sandbox_env` | 渐进式发现：`default_set`, `shell_*`, `docker_*`, `ssh_*` |
+| `sandbox_audit_query` | 读取审计日志（过滤 + 分页）—— 仅当 `[audit] log_path` 非空时暴露 |
 
 ## sandbox_env 操作
 

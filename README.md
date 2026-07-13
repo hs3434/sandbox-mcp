@@ -93,7 +93,8 @@ transport = "streamable-http"
 work_home = "~/.sandbox-mcp/workspaces/"
 
 [audit]                 # JSON-line audit log
-log_path = ""           # "" = stderr; set to a file path to append
+log_path = "~/.sandbox-mcp/audit.log"
+                        # "" = stderr (sandbox_audit_query hidden); file = query tool enabled
 
 [docker]                # container defaults
 container_name_prefix = "sandbox-"
@@ -188,6 +189,7 @@ different machine or is managed as a systemd service.
 | `sandbox_file_patch` | Targeted edit with fuzzy match |
 | `sandbox_file_search` | Ripgrep content search + glob file search |
 | `sandbox_env` | Progressive discovery: `default_set`, `shell_*`, `docker_*`, `ssh_*` |
+| `sandbox_audit_query` | Read the audit log (filtered, paginated) — only when `[audit] log_path` is set |
 
 ## sandbox_env Actions
 
