@@ -83,18 +83,6 @@ def _build_arg_parser(*, prog: str, with_http: bool, description: str) -> argpar
             type=int,
             help="HTTP port. Overrides [server] port and $SANDBOX_MCP_SERVER_PORT.",
         )
-        parser.add_argument(
-            "--transport",
-            choices=["streamable-http", "sse"],
-            default=None,
-            help=(
-                "HTTP transport for the MCP server. "
-                "'streamable-http' (default) is the current MCP spec (single /mcp endpoint). "
-                "'sse' is the legacy HTTP+SSE transport (/sse + /messages/) kept as a "
-                "fallback for older clients. "
-                "Overrides [server] transport and $SANDBOX_MCP_SERVER_TRANSPORT."
-            ),
-        )
     return parser
 
 
@@ -102,11 +90,7 @@ def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
     """Translate CLI flags into SANDBOX_MCP_* env vars so the rest of the
     config pipeline (which only reads env vars + config file) sees them.
 
-    CLI wins over any pre-set env var.  ``args.transport`` defaults to
-    ``None`` at the parser level precisely so we can tell "user didn't
-    pass --transport" from "user passed --transport with the default
-    value" — only the former should leave the env var unset so the
-    config-file value can win.
+    CLI wins over any pre-set env var.
     """
     if args.config:
         os.environ["SANDBOX_MCP_CONFIG"] = args.config
@@ -114,8 +98,6 @@ def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
         os.environ["SANDBOX_MCP_SERVER_HOST"] = args.host
     if getattr(args, "port", None) is not None:
         os.environ["SANDBOX_MCP_SERVER_PORT"] = str(args.port)
-    if getattr(args, "transport", None) is not None:
-        os.environ["SANDBOX_MCP_SERVER_TRANSPORT"] = args.transport
 
 
 TOOL_DEFINITIONS = [
@@ -482,16 +464,13 @@ def main_http(argv: list[str] | None = None):
     Bind address comes from CLI ``--host`` / ``--port``, then
     ``[server]`` in the config file, then the built-in default.
 
-    The HTTP transport is selected by CLI ``--transport``, then
-    ``[server] transport``, then ``$SANDBOX_MCP_SERVER_TRANSPORT``,
-    then the built-in default (``streamable-http``).
-      * ``streamable-http`` (default) mounts the MCP server on
-        ``/mcp`` using the current Streamable HTTP spec.
-      * ``sse`` mounts the legacy HTTP+SSE transport on
-        ``/sse`` + ``/messages/``.
+    The MCP server is mounted on ``/mcp`` using the Streamable HTTP
+    transport (current MCP spec).
 
     HTTP requests are gated by ``BearerAuthMiddleware``.  Tokens are
     read from a file on disk (env > config > ``~/.sandbox-mcp/auth_tokens``).
+    Tokens are re-read from the file on every request, so changes to the
+    file take effect immediately (hot-reload, like sshd's authorized_keys).
     If the file is missing/empty and ``auto_generate_if_empty`` is set,
     an ephemeral token is generated and printed to stderr; otherwise the
     server refuses to start (fail-closed).
@@ -522,7 +501,6 @@ def main_http(argv: list[str] | None = None):
     if not tokens:
         if server_cfg.auto_generate_if_empty:
             ephemeral = generate_ephemeral_token()
-            tokens = (ephemeral,)
             print(
                 "\n[sandbox-mcp-http] WARNING: no tokens found at "
                 f"{tokens_file}.\n"
@@ -545,42 +523,33 @@ def main_http(argv: list[str] | None = None):
             )
             sys.exit(1)
 
-    import uvicorn
-
-    from sandbox_mcp.config import ServerConfig
-
-    server_cfg_typed: ServerConfig = server_cfg  # narrow type for transport field
-    transport = server_cfg_typed.transport
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
-    logger.info("Starting sandbox-mcp HTTP server on %s:%s (transport=%s)", host, port, transport)
-    logger.info("Loaded %d bearer token(s) from %s", len(tokens), tokens_file)
+    logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
+    logger.info("Tokens file: %s (hot-reloaded per request)", tokens_file)
 
-    app = _build_http_app(transport=transport, tokens=tokens)
+    app = _build_http_app(tokens_file=tokens_file)
+
+    import uvicorn
 
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
-def _build_http_app(*, transport: str, tokens: tuple[str, ...]):
-    """Build the Starlette ASGI app for the chosen HTTP transport.
+def _build_http_app(*, tokens_file):
+    """Build the Starlette ASGI app for the HTTP transport.
 
-    ``streamable-http`` mounts a single ``/mcp`` endpoint backed by
+    Mounts a single ``/mcp`` endpoint backed by
     :class:`StreamableHTTPSessionManager` (current MCP spec).
-    ``sse`` mounts the legacy ``/sse`` + ``/messages/`` pair backed by
-    :class:`SseServerTransport` for older clients.
 
-    Both variants wrap the app in :class:`BearerAuthMiddleware` so the
-    auth gate is identical regardless of transport.  An unknown transport
-    raises ``ValueError`` so a typo in ``[server] transport`` fails loudly
-    at startup instead of silently falling back.
+    The app is wrapped in :class:`BearerAuthMiddleware` which re-reads
+    the token file on every request for hot-reload.
     """
     import mcp.types as types
     from mcp.server import Server
     from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
+    from starlette.routing import Mount
 
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
@@ -596,73 +565,48 @@ def _build_http_app(*, transport: str, tokens: tuple[str, ...]):
     async def handle_call_tool(name, arguments):
         return server.call_tool(name, arguments)
 
-    if transport == "streamable-http":
-        from contextlib import asynccontextmanager
+    from contextlib import asynccontextmanager
 
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
-        session_manager = StreamableHTTPSessionManager(
-            app=mcp_server,
-            json_response=False,
-            stateless=False,
-        )
+    session_manager = StreamableHTTPSessionManager(
+        app=mcp_server,
+        json_response=False,
+        stateless=False,
+    )
 
-        @asynccontextmanager
-        async def lifespan(_app):
-            async with session_manager.run():
-                yield
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with session_manager.run():
+            yield
 
-        async def handle_mcp(scope, receive, send):
-            await session_manager.handle_request(scope, receive, send)
+    async def handle_mcp(scope, receive, send):
+        await session_manager.handle_request(scope, receive, send)
 
-        app = Starlette(
-            routes=[Mount("/mcp", app=handle_mcp)],
-            lifespan=lifespan,
-        )
-    elif transport == "sse":
-        from mcp.server.sse import SseServerTransport
+    app = Starlette(
+        routes=[Mount("/mcp", app=handle_mcp)],
+        lifespan=lifespan,
+    )
 
-        sse = SseServerTransport("/messages/")
-
-        async def handle_sse(scope, receive, send):
-            async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-                await mcp_server.run(
-                    read_stream,
-                    write_stream,
-                    mcp_server.create_initialization_options(),
-                )
-
-        async def handle_messages(scope, receive, send):
-            await sse.handle_post_message(scope, receive, send)
-
-        app = Starlette(
-            routes=[
-                Route("/sse", endpoint=handle_sse),
-                Route("/messages/", endpoint=handle_messages, methods=["POST"]),
-            ],
-        )
-    else:
-        raise ValueError(f"Unknown transport {transport!r}. Expected 'streamable-http' or 'sse'.")
-
-    # Wrap with bearer-token auth.  Middleware sits OUTSIDE the routes so
-    # every transport endpoint is gated by the same token check.  Health
-    # checks (none defined yet) could be added with an allowlist path check.
-    app.add_middleware(BearerAuthMiddleware, tokens=tokens)
+    # Wrap with bearer-token auth.  Middleware re-reads the token file
+    # on every request so token changes take effect immediately.
+    app.add_middleware(BearerAuthMiddleware, tokens_file=tokens_file)
     return app
 
 
 class BearerAuthMiddleware:
     """Starlette ASGI middleware that requires ``Authorization: Bearer <t>``.
 
-    Tokens are compared in constant time via ``secrets.compare_digest``
-    to defeat timing side-channels.  Failures respond ``401 Unauthorized``
-    with a ``WWW-Authenticate: Bearer`` challenge so MCP clients know
-    how to retry.
+    Tokens are re-read from the file on every request (hot-reload, like
+    sshd's authorized_keys).  Tokens are compared in constant time via
+    ``secrets.compare_digest`` to defeat timing side-channels.  Failures
+    respond ``401 Unauthorized`` with a ``WWW-Authenticate: Bearer``
+    challenge so MCP clients know how to retry.
     """
 
-    def __init__(self, app, tokens: tuple[str, ...]) -> None:
+    def __init__(self, app, tokens_file) -> None:
         self.app = app
-        self.tokens = tokens
+        self.tokens_file = tokens_file
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
@@ -682,7 +626,12 @@ class BearerAuthMiddleware:
         if not presented:
             await _send_401(send, "empty bearer token")
             return
-        if not any(secrets.compare_digest(presented, t) for t in self.tokens):
+
+        # Re-read tokens from file on every request (hot-reload).
+        from sandbox_mcp.auth import load_auth_tokens
+
+        tokens = load_auth_tokens(self.tokens_file)
+        if not any(secrets.compare_digest(presented, t) for t in tokens):
             await _send_401(send, "invalid token")
             return
 

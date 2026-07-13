@@ -56,14 +56,10 @@ sandbox-mcp has two transports:
 | `--config PATH` / `-c PATH` | both | path to a TOML config file |
 | `--host ADDR` / `-H ADDR` | `sandbox-mcp-http` | HTTP bind address |
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP port |
-| `--transport {streamable-http,sse}` | `sandbox-mcp-http` | HTTP transport (default `streamable-http`) |
 
 ```bash
 # standalone HTTP server (default: streamable-http on /mcp)
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
-
-# fall back to the legacy HTTP+SSE transport if your client is older
-sandbox-mcp-http --transport sse
 
 # stdio (passed via the MCP host's config; not run from a shell)
 #   see Register with Hermes below for an example
@@ -91,7 +87,7 @@ Config sections:
 [server]                # HTTP server
 host = "0.0.0.0"
 port = 8010
-transport = "streamable-http"   # or "sse" for the legacy HTTP+SSE transport
+transport = "streamable-http"
 
 [storage]               # persistent workspace directory
 work_home = "~/.sandbox-mcp/workspaces/"
@@ -180,17 +176,6 @@ agent:
 Hermes connects to the HTTP MCP endpoint (`/mcp`, the current MCP spec
 "Streamable HTTP" transport).  Useful when the MCP server runs on a
 different machine or is managed as a systemd service.
-
-If your client only speaks the older HTTP+SSE transport, start the
-server with `--transport sse` and point the client at `/sse` instead:
-
-```yaml
-mcp_servers:
-  sandbox:
-    url: "http://localhost:8010/sse"   # legacy HTTP+SSE transport
-    headers:
-      Authorization: "Bearer <your-token>"
-```
 
 ## Tools
 
@@ -354,9 +339,6 @@ curl -X POST -H "Authorization: Bearer <your-token>" \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
      http://127.0.0.1:8010/mcp
-
-# legacy SSE transport (only if --transport sse)
-curl -N -H "Authorization: Bearer <your-token>" http://127.0.0.1:8010/sse
 ```
 
 ### Auto-generating a dev token

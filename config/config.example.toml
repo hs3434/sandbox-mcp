@@ -17,13 +17,6 @@
 host = "0.0.0.0"
 port = 8010
 
-# HTTP transport for the MCP server.
-#   "streamable-http"  — current MCP spec. Single /mcp endpoint.
-#   "sse"             — legacy HTTP+SSE transport (/sse + /messages/).
-#                       Use only if your client doesn't yet speak the
-#                       new streamable-http transport.
-transport = "streamable-http"
-
 # Bearer-token auth for HTTP clients.
 # Path to the file with one accepted token per line (the file MUST be
 # mode 0600; sandbox-mcp refuses to read a world/group-readable file).

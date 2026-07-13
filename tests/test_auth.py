@@ -128,7 +128,7 @@ def token_file(tmp_path):
     return f
 
 
-def test_standalone_middleware_valid_token():
+def test_standalone_middleware_valid_token(token_file):
     """Integration-style test: Starlette TestClient with BearerAuthMiddleware."""
     from starlette.applications import Starlette
     from starlette.responses import PlainTextResponse
@@ -138,7 +138,7 @@ def test_standalone_middleware_valid_token():
     from sandbox_mcp.server import BearerAuthMiddleware
 
     app = Starlette(routes=[Route("/", lambda r: PlainTextResponse("ok"))])
-    app.add_middleware(BearerAuthMiddleware, tokens=("test-token-abcdef-32-chars-long!",))
+    app.add_middleware(BearerAuthMiddleware, tokens_file=token_file)
 
     with TestClient(app) as client:
         # Valid token
@@ -166,7 +166,7 @@ def test_standalone_middleware_valid_token():
         assert "malformed" in resp.text
 
 
-def test_standalone_middleware_www_authenticate_header():
+def test_standalone_middleware_www_authenticate_header(token_file):
     """The 401 response includes a Bearer challenge so MCP clients know to retry."""
     from starlette.applications import Starlette
     from starlette.responses import PlainTextResponse
@@ -176,7 +176,7 @@ def test_standalone_middleware_www_authenticate_header():
     from sandbox_mcp.server import BearerAuthMiddleware
 
     app = Starlette(routes=[Route("/", lambda r: PlainTextResponse("ok"))])
-    app.add_middleware(BearerAuthMiddleware, tokens=("tok",))
+    app.add_middleware(BearerAuthMiddleware, tokens_file=token_file)
 
     with TestClient(app) as client:
         resp = client.get("/")

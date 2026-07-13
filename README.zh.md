@@ -53,14 +53,10 @@ sandbox-mcp 有两种传输模式：
 | `--config PATH` / `-c PATH` | 两者 | TOML 配置文件路径 |
 | `--host ADDR` / `-H ADDR` | `sandbox-mcp-http` | HTTP 绑定地址 |
 | `--port N` / `-p N` | `sandbox-mcp-http` | HTTP 端口 |
-| `--transport {streamable-http,sse}` | `sandbox-mcp-http` | HTTP 传输方式（默认 `streamable-http`） |
 
 ```bash
 # 独立 HTTP 服务（默认：streamable-http，监听 /mcp）
 sandbox-mcp-http -c /etc/sandbox-mcp/prod.toml --port 9000
-
-# 如果客户端只支持老版本，回退到 HTTP+SSE 传输
-sandbox-mcp-http --transport sse
 
 # stdio（在 MCP host 的配置里传，不从 shell 跑）
 #   下面"注册到 Hermes"小节有完整示例
@@ -86,7 +82,7 @@ sandbox-mcp 按以下优先级读配置（从高到低）：
 [server]                # HTTP 服务
 host = "0.0.0.0"
 port = 8010
-transport = "streamable-http"   # 或 "sse" 走老版本 HTTP+SSE 传输
+transport = "streamable-http"
 
 [storage]               # 持久化 workspace 目录
 work_home = "~/.sandbox-mcp/workspaces/"
@@ -173,17 +169,6 @@ agent:
 
 Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTTP" 传输）。
 适合 MCP server 跑在不同机器上，或作为 systemd 服务管理的情况。
-
-如果你的客户端只支持老版本 HTTP+SSE 传输，启动 server 时加 `--transport sse`，
-客户端连 `/sse`：
-
-```yaml
-mcp_servers:
-  sandbox:
-    url: "http://localhost:8010/sse"   # 老版本 HTTP+SSE 传输
-    headers:
-      Authorization: "Bearer <你的token>"
-```
 
 ## 工具列表
 
@@ -334,9 +319,6 @@ curl -X POST -H "Authorization: Bearer <你的token>" \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
      http://127.0.0.1:8010/mcp
-
-# 老版本 SSE 传输（仅当 --transport sse 时）
-curl -N -H "Authorization: Bearer <你的token>" http://127.0.0.1:8010/sse
 ```
 
 ### 自动生成开发用 token
