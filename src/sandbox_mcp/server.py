@@ -511,6 +511,11 @@ def main(argv: list[str] | None = None):
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    audit_log_path = _load_config().audit.log_path
+    if audit_log_path:
+        logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
+    else:
+        logger.warning("audit: log_path=<empty> (query tool disabled)")
     server = SandboxServer()
     mcp_server = Server("sandbox-mcp")
 
@@ -603,6 +608,11 @@ def main_http(argv: list[str] | None = None):
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
+    audit_log_path = _load_config().audit.log_path
+    if audit_log_path:
+        logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
+    else:
+        logger.warning("audit: log_path=<empty> (query tool disabled)")
     logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
     logger.info("Tokens file: %s (hot-reloaded per request)", tokens_file)
 
