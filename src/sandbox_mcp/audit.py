@@ -33,8 +33,11 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import sys
 import time
+from collections import deque
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import IO, Any
 
@@ -145,3 +148,62 @@ def disable_audit() -> None:
     silence it, redirect stderr in the host process.
     """
     return
+
+
+logger = logging.getLogger(__name__)
+
+# Public bounds for ``sandbox_audit_query``'s ``tail`` parameter.
+_DEFAULT_TAIL = 5_000
+_MAX_TAIL = 100_000
+
+
+def read_tail_lines(path: Path, n: int) -> list[str]:
+    """Read at most ``n`` lines from the end of ``path``.
+
+    Raises ``ValueError`` if ``n`` is outside ``(0, _MAX_TAIL]``.
+    Binary-safe via ``errors="replace"``.
+    """
+    if n <= 0 or n > _MAX_TAIL:
+        raise ValueError(f"tail must be in (0, {_MAX_TAIL}], got {n}")
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        return list(deque(f, maxlen=n))
+
+
+def parse_records(lines: Iterable[str]) -> Iterator[dict]:
+    """Yield parsed JSON dicts from ``lines``; skip blanks and malformed input."""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("audit: skipping malformed line: %r", line[:120])
+
+
+def apply_filters(
+    records: Iterable[dict],
+    *,
+    action: str | None = None,
+    machine: str | None = None,
+    status: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+) -> Iterator[dict]:
+    """Yield records that pass all non-None filters.
+
+    ``since`` is inclusive (``ts >= since``); ``until`` is exclusive
+    (``ts < until``).
+    """
+    for r in records:
+        if action is not None and r.get("action") != action:
+            continue
+        if machine is not None and r.get("machine") != machine:
+            continue
+        if status is not None and r.get("status") != status:
+            continue
+        if since is not None and r.get("ts", 0) < since:
+            continue
+        if until is not None and r.get("ts", 0) >= until:
+            continue
+        yield r
