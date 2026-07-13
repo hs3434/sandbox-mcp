@@ -87,8 +87,8 @@ transport = "streamable-http"
 [storage]               # 持久化 workspace 目录
 work_home = "~/.sandbox-mcp/workspaces/"
 
-[audit]                 # JSON-line 审计日志
-log_path = "~/.sandbox-mcp/audit.log"
+[audit]                 # SQLite 审计日志（每次工具调用一行）
+log_path = "~/.sandbox-mcp/audit.db"
                         # "" = stderr（隐藏 sandbox_audit_query）；文件 = 启用查询工具
 
 [docker]                # 容器默认设置
@@ -119,7 +119,7 @@ default_search_limit = 50
 ```bash
 SANDBOX_MCP_SERVER_PORT=9000 sandbox-mcp-http
 SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX="box-" sandbox-mcp
-SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
+SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.db sandbox-mcp
 ```
 
 `work_home` 目录会自动创建。`docker_run` 被调用时，会在 `work_home/<机器名>/`

@@ -54,9 +54,7 @@ from sandbox_mcp.audit import (
     DEFAULT_AUDIT_LOGGER,
     DEFAULT_TAIL,
     AuditLogger,
-    apply_filters,
-    parse_records,
-    read_tail_lines,
+    query_audit,
     reset_default_logger,
 )
 from sandbox_mcp.backends.docker_backend import DockerBackend
@@ -455,38 +453,32 @@ class SandboxServer:
         if not log_path:
             return {"error": "audit log is not file-backed"}
 
-        tail = int(args.get("tail", DEFAULT_TAIL))
         start = int(args.get("start", 0))
-        end = int(args.get("end", start + 100))
-
-        if start < 0:
-            raise ValueError(f"start must be >= 0, got {start}")
-        if end < 1:
-            raise ValueError(f"end must be >= 1, got {end}")
-        if end <= start:
-            raise ValueError(f"end ({end}) must be > start ({start})")
+        raw_end = args.get("end")
+        end = int(raw_end) if raw_end is not None else None
 
         path = Path(log_path).expanduser()
-        raw_lines = read_tail_lines(path, tail) if path.is_file() else []
-        records = list(parse_records(raw_lines))
-        filtered = list(
-            apply_filters(
-                records,
-                action=args.get("action"),
-                machine=args.get("machine"),
-                status=args.get("status"),
-                since=args.get("since"),
-                until=args.get("until"),
-            )
+        result = query_audit(
+            path,
+            tail=int(args.get("tail", DEFAULT_TAIL)),
+            start=start,
+            end=end,
+            action=args.get("action"),
+            machine=args.get("machine"),
+            status=args.get("status"),
+            since=args.get("since"),
+            until=args.get("until"),
         )
-        total = len(filtered)
-        window_end = min(end, total)
+        total = result["total"]
+        # `end` may have been defaulted inside ``query_audit`` (start + 100);
+        # re-derive the effective end so the window reflects the call.
+        effective_end = end if end is not None else start + 100
+        window_end = min(effective_end, total)
         window_start = min(start, total)
-
         return {
-            "records": filtered[window_start:window_end],
+            "records": result["records"],
             "total": total,
-            "tail_size": len(raw_lines),
+            "tail_size": result["tail_size"],
             "window": [window_start, window_end],
         }
 

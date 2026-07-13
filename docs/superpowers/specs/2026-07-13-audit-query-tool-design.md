@@ -43,7 +43,7 @@ the log.
 ### Default log path
 
 `AuditConfig.log_path` default changes from `""` (stderr) to
-`"~/.sandbox-mcp/audit.log"`. Rationale: audit persistence is the
+`"~/.sandbox-mcp/audit.db"`. Rationale: persistent storage is the
 norm; stderr-only mode is the exception (only useful when an external
 log collector is attached). A file default also makes
 `sandbox_audit_query` available out of the box — no extra config
@@ -60,7 +60,7 @@ empty. The agent never sees a tool it cannot use; there is no error
 path for "not file-backed".
 
 - Server logs a one-line startup message:
-  - `audit: log_path=~/.sandbox-mcp/audit.log (query tool enabled)`
+  - `audit: log_path=~/.sandbox-mcp/audit.db (query tool enabled)`
     or
   - `audit: log_path=<empty> (query tool disabled)`
 - The audit config is loaded once at server startup (consistent with
@@ -301,9 +301,9 @@ New file `tests/test_audit_query.py`:
 - Purely additive at the API level: one new tool, no change to
   existing tools
 - **Behavioural change**: `[audit] log_path` default moves from `""`
-  to `"~/.sandbox-mcp/audit.log"`. Existing deployments that relied
-  on stderr logging will now write to a file by default. To restore
-  the old behaviour, set `log_path = ""` (or
+  to `"~/.sandbox-mcp/audit.db"`. Existing deployments that relied
+  on stderr logging will now write to a SQLite file by default. To
+  restore the old behaviour, set `log_path = ""` (or
   `SANDBOX_MCP_AUDIT_LOG_PATH=""`).
 - No env var rename; `SANDBOX_MCP_AUDIT_LOG_PATH` semantics unchanged
 

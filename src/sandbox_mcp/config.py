@@ -72,7 +72,7 @@ class StorageConfig:
 
 @dataclass(frozen=True)
 class AuditConfig:
-    log_path: str = "~/.sandbox-mcp/audit.log"  # default file; "" = stderr
+    log_path: str = "~/.sandbox-mcp/audit.db"  # default SQLite path; "" = stderr
 
 
 @dataclass(frozen=True)

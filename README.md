@@ -92,8 +92,8 @@ transport = "streamable-http"
 [storage]               # persistent workspace directory
 work_home = "~/.sandbox-mcp/workspaces/"
 
-[audit]                 # JSON-line audit log
-log_path = "~/.sandbox-mcp/audit.log"
+[audit]                 # SQLite audit log (one row per tool call)
+log_path = "~/.sandbox-mcp/audit.db"
                         # "" = stderr (sandbox_audit_query hidden); file = query tool enabled
 
 [docker]                # container defaults
@@ -124,7 +124,7 @@ Every value can also be overridden via env var (uppercased, dots → underscores
 ```bash
 SANDBOX_MCP_SERVER_PORT=9000 sandbox-mcp-http
 SANDBOX_MCP_DOCKER_CONTAINER_NAME_PREFIX="box-" sandbox-mcp
-SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.log sandbox-mcp
+SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.db sandbox-mcp
 ```
 
 The `work_home` directory is created automatically. When `docker_run` is called,

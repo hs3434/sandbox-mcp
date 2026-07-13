@@ -76,7 +76,7 @@ services:
       # SANDBOX_MCP_DOCKER_HOST above.
       - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:${DOCKER_SOCK_PATH:-/var/run/docker.sock}"
 
-      # Config directory: auth_tokens, config.toml, audit.log
+      # Config directory: auth_tokens, config.toml, audit.db
       # Target path must match HOME so ``Path.home() / ".sandbox-mcp"`` resolves here.
       - ./config:${SANDBOX_MCP_HOME:-/home/sandbox}/.sandbox-mcp
 
