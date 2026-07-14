@@ -16,6 +16,11 @@ COPY pyproject.toml LICENSE ./
 COPY src/ ./src/
 RUN pip install --no-cache-dir .
 
+# HOME must match the config volume mount target in docker-compose.yml.
+# sandbox-mcp resolves config via Path.home() / ".sandbox-mcp".
+ENV HOME=/home/sandbox
+RUN mkdir -p /home/sandbox/.sandbox-mcp
+
 EXPOSE 8010
 
 ENTRYPOINT ["sandbox-mcp-http"]
