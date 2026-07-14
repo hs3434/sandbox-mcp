@@ -13,4 +13,6 @@ uv.lock
 config/auth_tokens
 config/config.toml
 config/audit.db
+config/audit.db-shm
+config/audit.db-wal
 .worktrees/
