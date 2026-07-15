@@ -122,11 +122,14 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_ps",
             "description": (
-                "List existing Docker containers matching "
-                "sandbox-* (direct daemon query, works even "
-                "after restart when MachineRegistry is empty)."
+                "List sandbox-mcp-managed containers: queries the daemon "
+                "for every container carrying the `sandbox-mcp.managed=true` "
+                "label and returns their state, image, purpose, and creation "
+                "time (direct daemon query, works even after restart when "
+                "MachineRegistry is empty). This is also the refresh "
+                "operation — each call re-adopts surviving containers into "
+                "the registry."
             ),
-            "optional": {"name_prefix": "string - filter by name prefix"},
             "returns": [
                 {
                     "name": "string",
