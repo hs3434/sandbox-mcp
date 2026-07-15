@@ -580,12 +580,8 @@ def main(argv: list[str] | None = None):
     ).parse_args(argv)
     _apply_cli_overrides_to_env(args)
 
-    try:
-        from mcp.server import Server
-        from mcp.server.stdio import stdio_server
-    except ImportError:
-        logging.error("mcp package not installed. Run: pip install mcp")
-        return
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     audit_log_path = _load_config().audit.log_path
