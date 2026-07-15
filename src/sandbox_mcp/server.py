@@ -50,6 +50,8 @@ import secrets
 import time
 from pathlib import Path
 
+import mcp.types as types
+
 from sandbox_mcp.audit import (
     DEFAULT_AUDIT_LOGGER,
     DEFAULT_TAIL,
@@ -285,19 +287,6 @@ _AUDIT_QUERY_TOOL_DEFINITION = {
 }
 
 
-class ToolDef:
-    def __init__(self, name, description, inputSchema):
-        self.name = name
-        self.description = description
-        self.inputSchema = inputSchema
-
-
-class TextContent:
-    def __init__(self, text):
-        self.type = "text"
-        self.text = text
-
-
 class SandboxServer:
     """Core sandbox MCP server logic (transport-agnostic)."""
 
@@ -394,33 +383,43 @@ class SandboxServer:
         logger.info("default machine %r ready%s", name, detail)
 
     def list_tools(self):
-        tools = [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]
+        tools = [
+            types.Tool(name=t["name"], description=t["description"], inputSchema=t["inputSchema"])
+            for t in TOOL_DEFINITIONS
+        ]
         if _load_config().audit.log_path:
             t = _AUDIT_QUERY_TOOL_DEFINITION
-            tools.append(ToolDef(t["name"], t["description"], t["inputSchema"]))
+            tools.append(
+                types.Tool(
+                    name=t["name"], description=t["description"], inputSchema=t["inputSchema"]
+                )
+            )
         return tools
 
     def call_tool(self, name, arguments):
         handler = getattr(self, f"_handle_{name}", None)
         if handler is None:
-            return [TextContent(json.dumps({"error": f"Unknown tool: {name}"}))]
+            return [
+                types.TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))
+            ]
         arguments = arguments or {}
         start = time.monotonic()
         status = "ok"
         try:
             result = handler(arguments)
-            return [TextContent(json.dumps(result, ensure_ascii=False))]
+            return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
         except Exception as e:
             status = "error"
             logger.exception("call_tool %s failed", name)
             return [
-                TextContent(
-                    json.dumps(
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
                         {
                             "error": str(e),
                             "type": type(e).__name__,
                         }
-                    )
+                    ),
                 )
             ]
         finally:
@@ -582,7 +581,6 @@ def main(argv: list[str] | None = None):
     _apply_cli_overrides_to_env(args)
 
     try:
-        import mcp.types as types
         from mcp.server import Server
         from mcp.server.stdio import stdio_server
     except ImportError:
@@ -600,15 +598,11 @@ def main(argv: list[str] | None = None):
 
     @mcp_server.list_tools()
     async def handle_list_tools():
-        return [
-            types.Tool(name=t.name, description=t.description, inputSchema=t.inputSchema)
-            for t in server.list_tools()
-        ]
+        return server.list_tools()
 
     @mcp_server.call_tool()
     async def handle_call_tool(name, arguments):
-        result = server.call_tool(name, arguments)
-        return [types.TextContent(type=item.type, text=item.text) for item in result]
+        return server.call_tool(name, arguments)
 
     async def run():
         async with stdio_server() as (read_stream, write_stream):
@@ -712,7 +706,6 @@ def _build_http_app(*, tokens_file):
     The app is wrapped in :class:`BearerAuthMiddleware` which re-reads
     the token file on every request for hot-reload.
     """
-    import mcp.types as types
     from mcp.server import Server
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -722,15 +715,11 @@ def _build_http_app(*, tokens_file):
 
     @mcp_server.list_tools()
     async def handle_list_tools():
-        return [
-            types.Tool(name=t.name, description=t.description, inputSchema=t.inputSchema)
-            for t in server.list_tools()
-        ]
+        return server.list_tools()
 
     @mcp_server.call_tool()
     async def handle_call_tool(name, arguments):
-        result = server.call_tool(name, arguments)
-        return [types.TextContent(type=item.type, text=item.text) for item in result]
+        return server.call_tool(name, arguments)
 
     from contextlib import asynccontextmanager
 
