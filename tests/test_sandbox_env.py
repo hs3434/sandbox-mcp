@@ -251,6 +251,52 @@ def test_docker_ps_returns_container_list(sandbox_env):
     assert sandbox_env._machines.adopt.call_count == 2
 
 
+def test_docker_ps_reads_purpose_from_label(sandbox_env):
+    """purpose is persisted as a ``sandbox-mcp.purpose`` docker label and
+    read back during reconciliation, so it survives restarts."""
+    managed = [
+        (
+            "dev",
+            {
+                "State": {"Status": "running"},
+                "Created": "2026-01-01",
+                "Config": {
+                    "Image": "alpine:3",
+                    "Labels": {
+                        "sandbox-mcp.managed": "true",
+                        "sandbox-mcp.machine": "dev",
+                        "sandbox-mcp.purpose": "Python dev box",
+                    },
+                },
+            },
+        ),
+    ]
+    sandbox_env._docker.list_managed_containers.return_value = managed
+    result = sandbox_env.dispatch("docker_ps", {})
+    assert result["containers"][0]["purpose"] == "Python dev box"
+    # adopt received a TargetInfo carrying the persisted purpose.
+    sandbox_env._machines.adopt.assert_called_once()
+    adopted_info = sandbox_env._machines.adopt.call_args.args[2]
+    assert adopted_info.purpose == "Python dev box"
+
+
+def test_docker_ps_purpose_empty_when_no_label(sandbox_env):
+    """A container without the purpose label reconciles with purpose=''."""
+    managed = [
+        (
+            "dev",
+            {
+                "State": {"Status": "running"},
+                "Created": "2026-01-01",
+                "Config": {"Image": "alpine:3", "Labels": {"sandbox-mcp.machine": "dev"}},
+            },
+        ),
+    ]
+    sandbox_env._docker.list_managed_containers.return_value = managed
+    result = sandbox_env.dispatch("docker_ps", {})
+    assert result["containers"][0]["purpose"] == ""
+
+
 def test_docker_ps_refresh_is_idempotent(sandbox_env):
     """A second call with no new containers on the daemon is a no-op
     for the registry (adopt is idempotent)."""

@@ -296,6 +296,22 @@ class DockerBackend(Backend):
 
         volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
 
+        # Reconciliation labels: identify containers this backend owns so
+        # :meth:`list_managed_containers` can re-discover them after the
+        # server restarts.  ``sandbox-mcp.managed`` is the authoritative
+        # marker - the prefix alone is too soft (an attacker could create
+        # a ``sandbox-foo`` container by hand and the prefix check would
+        # happily pick it up).  ``sandbox-mcp.purpose`` persists the
+        # machine's purpose across restarts (docker labels are immutable
+        # post-creation, so changing purpose means recreating the
+        # container -- there is deliberately no in-place update path).
+        labels = {
+            "sandbox-mcp.managed": "true",
+            "sandbox-mcp.machine": name,
+        }
+        if purpose:
+            labels["sandbox-mcp.purpose"] = purpose
+
         try:
             self._ensure_client().containers.run(
                 image,
@@ -312,17 +328,7 @@ class DockerBackend(Backend):
                 environment=env or None,
                 network=auto_network or None,
                 command="sleep infinity",
-                # Reconciliation labels: identify containers this
-                # backend owns so :meth:`list_managed_containers` can
-                # re-discover them after the server restarts.  The
-                # ``sandbox-mcp.managed`` flag is the authoritative
-                # marker — the prefix alone is too soft (an attacker
-                # could create a ``sandbox-foo`` container by hand and
-                # the prefix check would happily pick it up).
-                labels={
-                    "sandbox-mcp.managed": "true",
-                    "sandbox-mcp.machine": name,
-                },
+                labels=labels,
             )
         except _docker_module().errors.ImageNotFound:
             # ImageNotFound is a subclass of APIError - it MUST be caught
@@ -383,12 +389,20 @@ class DockerBackend(Backend):
         The returned info carries a ``note`` ("reattached to existing
         container ...") so the agent knows this was a reuse, not a fresh
         create, and that prior filesystem state may have been preserved.
+
+        Docker labels are immutable post-creation, so a reattach CANNOT
+        adopt a new ``purpose``: the existing container's
+        ``sandbox-mcp.purpose`` label is the truth.  If the caller passed
+        a different non-empty purpose, a note flags it (the agent must
+        remove + recreate to change purpose).  The returned TargetInfo
+        carries the EXISTING purpose, not the caller's.
         """
         docker_errors = _docker_module().errors
         try:
             container = self._ensure_client().containers.get(name)
         except docker_errors.NotFound:
             return None
+        existing_purpose = (container.labels or {}).get("sandbox-mcp.purpose", "")
         status = container.attrs.get("State", {}).get("Status", "unknown")
         if status != "running":
             try:
@@ -398,14 +412,19 @@ class DockerBackend(Backend):
                     name=name,
                     backend="docker",
                     status="error",
-                    purpose=purpose,
+                    purpose=existing_purpose,
                     image=image,
                     error=f"container exists but failed to start: {e}",
                 )
             note = "reattached to existing container (started; was stopped)"
         else:
             note = "reattached to existing container (already running)"
-        return self._running_info(container, name, purpose=purpose, image=image, note=note)
+        if purpose and purpose != existing_purpose:
+            note += (
+                f"; passed purpose {purpose!r} ignored (existing has "
+                f"{existing_purpose!r}); remove+recreate to change purpose"
+            )
+        return self._running_info(container, name, purpose=existing_purpose, image=image, note=note)
 
     def _running_info(
         self, container, name: str, purpose: str = "", image: str = "", note: str = ""
@@ -515,10 +534,12 @@ class DockerBackend(Backend):
                 if container.image.tags
                 else (container.image.short_id or "")
             )
+            purpose = (container.labels or {}).get("sandbox-mcp.purpose", "")
             return TargetInfo(
                 name=name,
                 backend="docker",
                 status="running" if running else "stopped",
+                purpose=purpose,
                 image=image,
                 created=container.attrs.get("Created", ""),
             )

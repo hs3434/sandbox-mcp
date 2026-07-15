@@ -123,7 +123,13 @@ DOCKER_HELP_RESPONSE = {
             ),
             "optional": {"name_prefix": "string - filter by name prefix"},
             "returns": [
-                {"name": "string", "status": "string", "image": "string", "created": "string"}
+                {
+                    "name": "string",
+                    "status": "string",
+                    "image": "string",
+                    "purpose": "string",
+                    "created": "string",
+                }
             ],
         },
         {
@@ -467,10 +473,15 @@ class SandboxEnv:
             running = status == "running"
             cfg = attrs.get("Config") or {}
             image = cfg.get("Image", "")
+            # Purpose is persisted as a docker label (immutable after
+            # creation); read it back so it survives restarts.
+            labels = cfg.get("Labels") or {}
+            purpose = labels.get("sandbox-mcp.purpose", "")
             info = TargetInfo(
                 name=machine,
                 backend="docker",
                 status="running" if running else status,
+                purpose=purpose,
                 image=image,
                 created=attrs.get("Created", ""),
             )
@@ -480,6 +491,7 @@ class SandboxEnv:
                     "name": machine,
                     "status": info.status,
                     "image": info.image or "",
+                    "purpose": info.purpose or "",
                     "created": info.created or "",
                 }
             )

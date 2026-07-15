@@ -76,6 +76,25 @@ def test_docker_create(docker_backend, mock_client):
     assert labels.get("sandbox-mcp.machine") == "dev"
 
 
+def test_docker_create_writes_purpose_label(docker_backend, mock_client):
+    """purpose is persisted as a docker label so it survives restarts
+    (read back by docker_ps reconciliation)."""
+    docker_backend.create(name="dev", purpose="Python dev box", image="python:3.12")
+    labels = mock_client.containers.run.call_args.kwargs.get("labels") or {}
+    assert labels.get("sandbox-mcp.purpose") == "Python dev box"
+
+
+def test_docker_create_omits_purpose_label_when_empty(docker_backend, mock_client):
+    """Empty purpose -> no label key (absence == 'no purpose', cleaner
+    than an empty-string value)."""
+    docker_backend.create(name="dev", purpose="", image="python:3.12")
+    labels = mock_client.containers.run.call_args.kwargs.get("labels") or {}
+    assert "sandbox-mcp.purpose" not in labels
+    # The identity labels are still present.
+    assert labels.get("sandbox-mcp.managed") == "true"
+    assert labels.get("sandbox-mcp.machine") == "dev"
+
+
 def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
     """Agent cannot smuggle arbitrary host paths into the container via
     a ``volumes`` kwarg.  The only bind mount is the auto-attached
@@ -610,13 +629,18 @@ def test_docker_create_reattaches_running_container_on_conflict(docker_backend, 
     mock_client.containers.run.side_effect = _conflict_error()
     existing = mock_client.containers.get.return_value
     existing.attrs = {"State": {"Status": "running"}}
+    # Existing container carries its own purpose label (the truth on reattach).
+    existing.labels = {"sandbox-mcp.purpose": "t"}
 
     info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
 
     assert info.status == "running", f"expected reattach, got {info!r}"
     assert info.name == "dev"
+    assert info.purpose == "t"  # existing label's purpose, kept
     assert "reattached" in info.note
     assert "already running" in info.note
+    # Purposes match -> no mismatch hint.
+    assert "ignored" not in info.note
     # run was attempted (and conflicted); get located the existing container.
     mock_client.containers.run.assert_called_once()
     mock_client.containers.get.assert_called_once_with("dev")
@@ -633,6 +657,7 @@ def test_docker_create_reattaches_and_starts_stopped_container(docker_backend, m
     mock_client.containers.run.side_effect = _conflict_error()
     existing = MagicMock()
     existing.attrs = {"State": {"Status": "exited"}}
+    existing.labels = {"sandbox-mcp.purpose": "t"}
 
     def _reload():
         existing.attrs = {"State": {"Status": "running"}}
@@ -648,6 +673,43 @@ def test_docker_create_reattaches_and_starts_stopped_container(docker_backend, m
     assert "started" in info.note
 
 
+def test_docker_create_reattach_notes_purpose_mismatch(docker_backend, mock_client):
+    """Docker labels are immutable, so a reattach CANNOT adopt a new
+    purpose.  The existing label's purpose is kept; if the caller passed
+    a different non-empty purpose, a note flags it (remove+recreate to
+    change).  The returned TargetInfo carries the EXISTING purpose.
+    """
+    mock_client.containers.run.side_effect = _conflict_error()
+    existing = mock_client.containers.get.return_value
+    existing.attrs = {"State": {"Status": "running"}}
+    existing.labels = {"sandbox-mcp.purpose": "old-purpose"}
+
+    info = docker_backend.create(name="dev", purpose="new-purpose", image="alpine:3")
+
+    assert info.status == "running"
+    # Existing purpose wins, not the caller's.
+    assert info.purpose == "old-purpose"
+    assert "reattached" in info.note
+    assert "ignored" in info.note
+    assert "'new-purpose'" in info.note
+    assert "'old-purpose'" in info.note
+    assert "remove+recreate" in info.note
+
+
+def test_docker_create_reattach_no_mismatch_note_when_purpose_empty(docker_backend, mock_client):
+    """Caller passes no purpose (empty) -> no mismatch note even if the
+    existing container has one (the caller didn't ask to set one)."""
+    mock_client.containers.run.side_effect = _conflict_error()
+    existing = mock_client.containers.get.return_value
+    existing.attrs = {"State": {"Status": "running"}}
+    existing.labels = {"sandbox-mcp.purpose": "old"}
+
+    info = docker_backend.create(name="dev", purpose="", image="alpine:3")
+    assert info.status == "running"
+    assert info.purpose == "old"
+    assert "ignored" not in info.note
+
+
 def test_docker_create_reattach_start_fails_to_run(docker_backend, mock_client):
     """Reattach starts a stopped container, but its command crashes
     immediately -- create() reports the error with a diagnostic, NOT
@@ -656,6 +718,7 @@ def test_docker_create_reattach_start_fails_to_run(docker_backend, mock_client):
     mock_client.containers.run.side_effect = _conflict_error()
     existing = MagicMock()
     existing.attrs = {"State": {"Status": "exited", "ExitCode": 1}}
+    existing.labels = {"sandbox-mcp.purpose": "t"}
     existing.logs.return_value = b"boom: missing dependency\n"
     # reload() leaves attrs as-is (still exited) -- the container died.
     mock_client.containers.get.return_value = existing
