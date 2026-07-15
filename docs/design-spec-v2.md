@@ -467,14 +467,15 @@ SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
 
 ### Docker Backend
 
-- Container naming: `sandbox-<machine_name>` (deterministic, allows reconnection)
+- Container naming: bare machine name, namespace enforced via the
+  `sandbox-mcp.managed=true` label (deterministic, allows reconnection)
 - Shell process: `docker exec -i <container> bash`
-- Container lifecycle: `docker run -d --name sandbox-<name> --init --restart
+- Container lifecycle: `docker run -d --name <name> --init --restart
   on-failure:3 <image> sleep infinity`
-- docker_stop: `docker stop sandbox-<name>`
-- docker_start: `docker start sandbox-<name>`
-- docker_remove: `docker rm -f sandbox-<name>`
-- docker_commit: `docker commit sandbox-<name> <image_tag>`
+- docker_stop: `docker stop <name>`
+- docker_start: `docker start <name>`
+- docker_remove: `docker rm -f <name>`
+- docker_commit: `docker commit <name> <image_tag>`
 - docker_build: `docker build -t <image_tag> -f <dockerfile> <context_dir>`
 
 ### SSH Backend

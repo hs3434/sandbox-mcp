@@ -53,7 +53,6 @@ def test_docker_create(docker_backend, mock_client):
         name="dev",
         purpose="test",
         image="python:3.12",
-        ports=["8080:8080"],
     )
     assert info.name == "dev"
     assert info.backend == "docker"

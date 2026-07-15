@@ -100,17 +100,22 @@ DOCKER_HELP_RESPONSE = {
             "action": "docker_run",
             "description": (
                 "Create and start a Docker container. Idempotent: "
-                "if a container named sandbox-<name> already exists "
+                "if a container with the same name already exists "
                 "(e.g. after an MCP restart), the call attaches to "
-                "it instead of creating a new one. An automatic workspace "
-                "directory is created on the host and mounted to /workspace."
+                "it instead of creating a new one. "
+                "Networking: every container joins a shared user-defined "
+                "bridge (default `sandbox-mcp`, configurable via "
+                "[docker] auto_network); sibling containers reach each "
+                "other by the same name you passed to docker_run — "
+                "e.g. from inside the container named `dev`, reach `db` "
+                "via `psql -h db`. No host port mapping is needed for "
+                "inter-container access; this tool exposes no `ports` "
+                "option because the bridge network makes it unnecessary. "
+                "Filesystem: a per-machine host directory under "
+                "work_home/<machine> is auto-bind-mounted to /workspace "
+                "and exposed as the container's working directory."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
-            "optional": {
-                "ports": "string[] - e.g. ['8080:8080']",
-                "env": "object",
-                "workdir": "string - default /workspace",
-            },
             "returns": {"name": "string", "status": "running", "backend": "docker"},
             "example": {"name": "dev", "image": "python:3.12", "purpose": "Python dev"},
         },
@@ -346,9 +351,6 @@ class SandboxEnv:
             self._docker,
             purpose=params.get("purpose", ""),
             image=params["image"],
-            ports=params.get("ports", []),
-            env=params.get("env", {}),
-            workdir=params.get("workdir", "/workspace"),
         )
         # Surface status plus any diagnostic (error) and non-fatal hint
         # (note, e.g. "reattached to existing container").  Without this

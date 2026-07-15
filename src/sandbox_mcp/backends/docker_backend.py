@@ -259,9 +259,14 @@ class DockerBackend(Backend):
         # sandbox's host-filesystem boundary intact: the agent cannot
         # smuggle arbitrary host directories (e.g. ``/etc``, ``/root``)
         # into a sandboxed container.
-        ports = kwargs.get("ports", []) or []
-        env = kwargs.get("env", {}) or {}
-        workdir = kwargs.get("workdir", "/workspace")
+        #
+        # Likewise, agent-supplied ``ports``, ``env``, and ``workdir`` are
+        # not honoured: inter-container access uses the auto-created
+        # bridge network by container-name DNS, exposing host port mappings
+        # would undo the sandbox's network isolation, the container's
+        # working directory is fixed at /workspace (the auto-mounted
+        # workspace; agents can `cd` inside any shell).  See
+        # sandbox_env.docker_run description for the agent-facing rationale.
 
         # Container names are the bare machine name.  Namespace is
         # enforced by the ``sandbox-mcp.managed=true`` docker label,
@@ -277,23 +282,6 @@ class DockerBackend(Backend):
         # it to /workspace inside the container.  The agent never sees the
         # host path — it just works in /workspace.
         machine_dir = get_work_dir(name)
-        port_bindings: dict = {}
-        for p in ports:
-            host_part, _, container_part = p.partition(":")
-            if container_part:
-                cp = container_part.split("/")[0]
-                binding = {"HostIp": "0.0.0.0", "HostPort": host_part}
-                try:
-                    port_bindings[int(cp)] = [binding]
-                except ValueError:
-                    port_bindings[cp] = [binding]
-            else:
-                cp = p.split("/")[0]
-                try:
-                    port_bindings[int(cp)] = None
-                except ValueError:
-                    port_bindings[cp] = None
-
         volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
 
         # Reconciliation labels: identify containers this backend owns so
@@ -322,10 +310,8 @@ class DockerBackend(Backend):
                     "Name": docker_cfg.restart_policy_name,
                     "MaximumRetryCount": docker_cfg.restart_max_retry_count,
                 },
-                working_dir=workdir,
+                working_dir="/workspace",
                 volumes=volume_bindings if volume_bindings else None,
-                ports=port_bindings if port_bindings else None,
-                environment=env or None,
                 network=auto_network or None,
                 command="sleep infinity",
                 labels=labels,

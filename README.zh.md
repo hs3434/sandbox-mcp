@@ -92,7 +92,6 @@ log_path = "~/.sandbox-mcp/audit.db"
                         # "" = stderr（隐藏 sandbox_audit_query）；文件 = 启用查询工具
 
 [docker]                # 容器默认设置
-container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
@@ -244,22 +243,23 @@ Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTT
 | Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_ps`, `docker_images` |
 | SSH | `ssh_connect`, `ssh_disconnect`, `ssh_reconnect`, `ssh_remove` |
 
-`docker_run` 是幂等的：如果名为 `sandbox-<name>` 的容器已经存在
-（比如 MCP 重启后），会重新挂载而不是失败。
+`docker_run` 是幂等的：如果同名容器已经存在（比如 MCP 重启后），
+会重新挂载而不是失败。
 
 ### 容器网络
 
 所有 `docker_run` 创建的容器加入同一个 user-defined bridge 网络（默认
-`sandbox-mcp`）。这意味着容器之间可以通过容器名 DNS 互相访问：
+`sandbox-mcp`）。这意味着容器之间可以通过你传给 `docker_run` 的 `name`
+（DNS 主机名）互相访问：
 
 ```python
 sandbox_env(action="docker_run", name="db", image="postgres:16")
 sandbox_env(action="docker_run", name="dev", image="debian:stable-slim")
-# 在 "dev" 容器里：psql -h sandbox-db
+# 在名为 "dev" 的容器里：psql -h db
 #                              ^ DNS 解析到 "db" 容器的 IP
 
 sandbox_env(action="docker_run", name="web", image="nginx:latest")
-# 在 "dev" 容器里：curl http://sandbox-web
+# 在名为 "dev" 的容器里：curl http://web
 #                              ^ DNS 解析到 "web" 容器的 IP
 ```
 

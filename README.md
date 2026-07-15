@@ -97,7 +97,6 @@ log_path = "~/.sandbox-mcp/audit.db"
                         # "" = stderr (sandbox_audit_query hidden); file = query tool enabled
 
 [docker]                # container defaults
-container_name_prefix = "sandbox-"
 default_image = "debian:stable-slim"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
@@ -255,24 +254,24 @@ different machine or is managed as a systemd service.
 | Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_ps`, `docker_images` |
 | SSH | `ssh_connect`, `ssh_disconnect`, `ssh_reconnect`, `ssh_remove` |
 
-`docker_run` is idempotent: if a container named `sandbox-<name>` already exists
+`docker_run` is idempotent: if a container with the same name already exists
 (e.g. after an MCP restart), it reattaches instead of failing.
 
 ### Container networking
 
 All containers created by `docker_run` join a shared user-defined bridge
 network (`sandbox-mcp` by default).  This means containers can reach each
-other by their container name (DNS-resolvable):
+other by the same name you passed to `docker_run` (DNS-resolvable):
 
 ```python
 sandbox_env(action="docker_run", name="db", image="postgres:16")
 sandbox_env(action="docker_run", name="dev", image="debian:stable-slim")
-# Inside "dev" container: psql -h sandbox-db
-#                              ^ DNS resolves to the "db" container's IP
+# Inside the "dev" container: psql -h db
+#                                  ^ DNS resolves to the "db" container's IP
 
 sandbox_env(action="docker_run", name="web", image="nginx:latest")
-# Inside "dev" container: curl http://sandbox-web
-#                              ^ DNS resolves to the "web" container's IP
+# Inside the "dev" container: curl http://web
+#                                  ^ DNS resolves to the "web" container's IP
 ```
 
 The network name is configured via `[docker] auto_network` (default
