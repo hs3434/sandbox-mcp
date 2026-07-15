@@ -658,29 +658,6 @@ class DockerBackend(Backend):
 
     # ---- discovery (direct daemon queries, no MachineRegistry) ----
 
-    def list_containers(self, name_prefix: str = "") -> list[dict]:
-        docker = _docker_module()
-        try:
-            containers = self._ensure_client().containers.list(all=True)
-        except docker.errors.APIError:
-            return []
-        result = []
-        for c in containers:
-            name = c.name
-            if name_prefix and not name.startswith(name_prefix):
-                continue
-            state = c.attrs.get("State", {})
-            result.append(
-                {
-                    "name": name,
-                    "status": state.get("Status", "unknown"),
-                    "image": c.image.tags[0] if c.image.tags else (c.image.short_id or "unknown"),
-                    "created": c.attrs.get("Created", ""),
-                }
-            )
-        result.sort(key=lambda x: x["created"], reverse=True)
-        return result
-
     def list_managed_containers(self) -> list[tuple[str, dict]]:
         """Re-discover containers this backend owns at server startup.
 
