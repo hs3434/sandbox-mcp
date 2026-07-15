@@ -607,7 +607,8 @@ def main(argv: list[str] | None = None):
 
     @mcp_server.call_tool()
     async def handle_call_tool(name, arguments):
-        return server.call_tool(name, arguments)
+        result = server.call_tool(name, arguments)
+        return [types.TextContent(type=item.type, text=item.text) for item in result]
 
     async def run():
         async with stdio_server() as (read_stream, write_stream):
@@ -728,7 +729,8 @@ def _build_http_app(*, tokens_file):
 
     @mcp_server.call_tool()
     async def handle_call_tool(name, arguments):
-        return server.call_tool(name, arguments)
+        result = server.call_tool(name, arguments)
+        return [types.TextContent(type=item.type, text=item.text) for item in result]
 
     from contextlib import asynccontextmanager
 
