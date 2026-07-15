@@ -56,9 +56,13 @@ services:
 
     volumes:
       # Docker socket - lets sandbox-mcp manage containers on the host.
+      # The host-side path varies (system docker: /var/run/docker.sock;
+      # rootless docker: /run/user/<uid>/docker.sock); set DOCKER_SOCK_PATH.
+      # The container-side path is always the standard /var/run/docker.sock
+      # so docker.from_env() finds it without extra config.
       # For remote Docker daemons (TCP/TLS), remove this mount and set
       # [docker] host in config.toml to e.g. "tcp://10.0.5.20:2376".
-      - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:${DOCKER_SOCK_PATH:-/var/run/docker.sock}"
+      - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock"
 
       # Config directory: auth_tokens, config.toml, audit.log
       - ./config:/home/sandbox/.sandbox-mcp
