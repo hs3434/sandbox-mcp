@@ -135,7 +135,7 @@ class DefaultMachineConfig:
     When ``enabled`` is true, ``SandboxServer.__init__`` provisions a
     machine (via the docker or ssh backend) right after the
     ``docker_ps`` reconciliation pass, so the agent can use
-    ``sandbox_shell_exec`` / ``sandbox_file_*`` immediately without an
+    ``shell_exec`` / ``file_*`` immediately without an
     explicit ``docker_run`` / ``ssh_connect``.
 
     Provisioning failure is **fatal**: the operator opted in, so a

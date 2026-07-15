@@ -29,7 +29,7 @@ stderr/file behaviour.  A path ending in ``.db`` selects SQLite mode;
 any other non-empty path selects append-mode JSON-line (legacy).
 
 The companion read-side helper :func:`query_audit` powers the
-``sandbox_audit_query`` MCP tool: it runs a single SQL query against
+``audit_query`` MCP tool: it runs a single SQL query against
 the database with optional filters and pagination.
 """
 
@@ -50,7 +50,7 @@ from sandbox_mcp.config import load as _load_config
 _CONTENT_KEYS = {"content"}
 _BINARY_HASH_LEN = 16
 
-# Public bounds for ``sandbox_audit_query``'s ``tail`` parameter.
+# Public bounds for ``audit_query``'s ``tail`` parameter.
 DEFAULT_TAIL = 5_000
 MAX_TAIL = 100_000
 
@@ -143,7 +143,7 @@ class AuditLogger:
         """Append one audit record.
 
         ``machine`` may be ``None`` for actions that don't apply to a
-        specific machine (e.g. ``sandbox_env(action="help")``).
+        specific machine (e.g. ``env(action="help")``).
         ``status`` is a short string like ``"ok"`` / ``"error"``.
         ``duration_ms`` is the wall-clock duration of the action.
         Any extra keyword arguments are recorded under ``details``;

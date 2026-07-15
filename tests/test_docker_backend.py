@@ -308,7 +308,7 @@ def test_docker_build_rejects_inline_dockerfile_content(docker_backend, tmp_path
     capabilities, so inline mode is a host-RCE vector.
 
     File mode (the only remaining path) requires the agent to have
-    written the Dockerfile via ``sandbox_file_write`` into
+    written the Dockerfile via ``file_write`` into
     ``/workspace/Dockerfile``, which is itself bound from work_home.
     """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))

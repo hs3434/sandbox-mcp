@@ -353,7 +353,7 @@ def _build_server(monkeypatch, log_path: str | None):
 
 
 def _call_audit(server, **kwargs):
-    result = server.call_tool("sandbox_audit_query", kwargs)
+    result = server.call_tool("audit_query", kwargs)
     return json.loads(result[0].text)
 
 
@@ -448,7 +448,7 @@ def test_handler_rejects_negative_start(monkeypatch, tmp_path):
     _seed(db, [_r(1.0, machine="x", action="y", status="ok")])
     srv = _build_server(monkeypatch, str(db))
     with pytest.raises(ValueError, match=r"start must be"):
-        srv._handle_sandbox_audit_query({"start": -1})
+        srv._handle_audit_query({"start": -1})
 
 
 def test_handler_rejects_non_positive_end(monkeypatch, tmp_path):
@@ -456,7 +456,7 @@ def test_handler_rejects_non_positive_end(monkeypatch, tmp_path):
     _seed(db, [_r(1.0, machine="x", action="y", status="ok")])
     srv = _build_server(monkeypatch, str(db))
     with pytest.raises(ValueError, match=r"end must be"):
-        srv._handle_sandbox_audit_query({"end": 0})
+        srv._handle_audit_query({"end": 0})
 
 
 def test_handler_rejects_inverted_window(monkeypatch, tmp_path):
@@ -464,7 +464,7 @@ def test_handler_rejects_inverted_window(monkeypatch, tmp_path):
     _seed(db, [_r(float(i), machine="x", action="y", status="ok") for i in range(5)])
     srv = _build_server(monkeypatch, str(db))
     with pytest.raises(ValueError, match=r"end .* must be > start"):
-        srv._handle_sandbox_audit_query({"start": 4, "end": 2})
+        srv._handle_audit_query({"start": 4, "end": 2})
 
 
 def test_handler_rejects_equal_window(monkeypatch, tmp_path):
@@ -472,7 +472,7 @@ def test_handler_rejects_equal_window(monkeypatch, tmp_path):
     _seed(db, [_r(float(i), machine="x", action="y", status="ok") for i in range(5)])
     srv = _build_server(monkeypatch, str(db))
     with pytest.raises(ValueError, match=r"end .* must be > start"):
-        srv._handle_sandbox_audit_query({"start": 3, "end": 3})
+        srv._handle_audit_query({"start": 3, "end": 3})
 
 
 def test_handler_no_caching_sees_new_records(monkeypatch, tmp_path):

@@ -33,14 +33,14 @@ def test_list_tools_includes_audit_query_by_default(server):
     tools = server.list_tools()
     names = {t.name for t in tools}
     expected = {
-        "sandbox_shell_exec",
-        "sandbox_shell_read",
-        "sandbox_file_read",
-        "sandbox_file_write",
-        "sandbox_file_patch",
-        "sandbox_file_search",
-        "sandbox_env",
-        "sandbox_audit_query",
+        "shell_exec",
+        "shell_read",
+        "file_read",
+        "file_write",
+        "file_patch",
+        "file_search",
+        "env",
+        "audit_query",
     }
     assert expected.issubset(names)
 
@@ -53,9 +53,9 @@ def test_list_tools_omits_audit_query_when_log_path_empty(monkeypatch):
     with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
         srv = SandboxServer()
     names = {t.name for t in srv.list_tools()}
-    assert "sandbox_audit_query" not in names
+    assert "audit_query" not in names
     # Sanity: other tools still present
-    assert "sandbox_shell_exec" in names
+    assert "shell_exec" in names
 
 
 def test_call_unknown_tool(server):
@@ -65,14 +65,14 @@ def test_call_unknown_tool(server):
 
 
 def test_sandbox_env_help(server):
-    result = server.call_tool("sandbox_env", {"action": "help"})
+    result = server.call_tool("env", {"action": "help"})
     data = json.loads(result[0].text)
     assert "operations" in data
     assert "more_help" in data
 
 
 def test_sandbox_env_status_empty(server):
-    result = server.call_tool("sandbox_env", {"action": "status"})
+    result = server.call_tool("env", {"action": "status"})
     data = json.loads(result[0].text)
     assert data["default_machine"] is None
     assert data["machines"] == []
@@ -102,9 +102,9 @@ def test_server_bootstraps_registry_via_docker_ps(monkeypatch):
 
 
 def test_audit_records_inner_action_for_sandbox_env(monkeypatch, tmp_path):
-    """``sandbox_env`` is a meta-tool: the inner ``action`` arg is the
+    """``env`` is a meta-tool: the inner ``action`` arg is the
     real action and should land in the indexed ``action`` column, not
-    the wrapper tool name ``"sandbox_env"``.
+    the wrapper tool name ``"env"``.
     """
     import sqlite3
 
@@ -117,8 +117,8 @@ def test_audit_records_inner_action_for_sandbox_env(monkeypatch, tmp_path):
         patch("sandbox_mcp.server.SSHBackend"),
     ):
         srv = SandboxServer(audit=AuditLogger(sink=str(db)))
-    # Trigger an audit entry by calling sandbox_env(action="status").
-    srv.call_tool("sandbox_env", {"action": "status"})
+    # Trigger an audit entry by calling env(action="status").
+    srv.call_tool("env", {"action": "status"})
 
     with sqlite3.connect(db) as conn:
         rows = conn.execute("SELECT action, details FROM audit").fetchall()
@@ -148,7 +148,7 @@ def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
         srv = SandboxServer(audit=AuditLogger(sink=str(db)))
 
     # Make a query through the tool.
-    srv.call_tool("sandbox_audit_query", {})
+    srv.call_tool("audit_query", {})
 
     with sqlite3.connect(db) as conn:
         actions = [r[0] for r in conn.execute("SELECT action FROM audit").fetchall()]

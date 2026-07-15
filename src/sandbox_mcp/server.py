@@ -17,13 +17,13 @@
 """Sandbox MCP Server: 7 tools (6 core + 1 sandbox_env entry).
 
 Tools exposed via MCP tools/list:
-  - sandbox_shell_exec
-  - sandbox_shell_read
-  - sandbox_file_read
-  - sandbox_file_write
-  - sandbox_file_patch
-  - sandbox_file_search
-  - sandbox_env  (progressive discovery)
+  - shell_exec
+  - shell_read
+  - file_read
+  - file_write
+  - file_patch
+  - file_search
+  - env  (progressive discovery)
 
 CLI flags
 ---------
@@ -111,7 +111,7 @@ def _apply_cli_overrides_to_env(args: argparse.Namespace) -> None:
 
 TOOL_DEFINITIONS = [
     {
-        "name": "sandbox_shell_exec",
+        "name": "shell_exec",
         "description": (
             "Execute a shell command. wait=true (default) blocks until "
             "completion or timeout. wait=false returns after "
@@ -140,7 +140,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_shell_read",
+        "name": "shell_read",
         "description": "Read new output from a shell (non-blocking). Detects "
         "command completion via markers.",
         "inputSchema": {
@@ -152,7 +152,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_file_read",
+        "name": "file_read",
         "description": "Read a text file with line numbers and pagination.",
         "inputSchema": {
             "type": "object",
@@ -169,7 +169,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_file_write",
+        "name": "file_write",
         "description": (
             "Write content to a file, replacing existing. "
             "Creates parent dirs. Runs syntax check for known "
@@ -189,7 +189,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_file_patch",
+        "name": "file_patch",
         "description": "Targeted find-and-replace edits with fuzzy matching. "
         "mode=replace or mode=patch.",
         "inputSchema": {
@@ -210,7 +210,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_file_search",
+        "name": "file_search",
         "description": "Search file contents (ripgrep) or find files by name (glob).",
         "inputSchema": {
             "type": "object",
@@ -240,7 +240,7 @@ TOOL_DEFINITIONS = [
         },
     },
     {
-        "name": "sandbox_env",
+        "name": "env",
         "description": (
             "Environment management. Call action=help to discover "
             "operations or action=status for current state. "
@@ -265,7 +265,7 @@ TOOL_DEFINITIONS = [
 
 
 _AUDIT_QUERY_TOOL_DEFINITION = {
-    "name": "sandbox_audit_query",
+    "name": "audit_query",
     "description": (
         "Query the audit log (read-only). Reads at most `tail` lines from "
         "the end of the file; filters apply within that tail; `start`/`end` "
@@ -425,13 +425,13 @@ class SandboxServer:
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
             # Querying the audit log shouldn't pollute it.
-            if name != "sandbox_audit_query":
+            if name != "audit_query":
                 arguments = arguments or {}
                 # ``sandbox_env`` is a meta-tool: the real action lives
                 # in ``arguments["action"]``.  For every other tool the
                 # tool name IS the action.  ``machine`` is the only
                 # argument promoted to a top-level indexed column.
-                if name == "sandbox_env":
+                if name == "env":
                     action = arguments.get("action", name)
                     details = {k: v for k, v in arguments.items() if k != "action"}
                 else:
@@ -451,7 +451,7 @@ class SandboxServer:
 
     # ---- shell handlers ----
 
-    def _handle_sandbox_shell_exec(self, args):
+    def _handle_shell_exec(self, args):
         timeout = args.get("timeout", 30)
         wait = args.get("wait", True)
         max_output = args.get("max_output", 50000)
@@ -469,7 +469,7 @@ class SandboxServer:
 
         return session.send(args["command"], wait=wait, timeout=timeout, max_output=max_output)
 
-    def _handle_sandbox_shell_read(self, args):
+    def _handle_shell_read(self, args):
         session = self.shells.get(args["shell_id"])
         if session is None:
             return {"error": f"Unknown shell_id: {args['shell_id']}"}
@@ -481,7 +481,7 @@ class SandboxServer:
         backend = self.machines.get_backend(machine)
         return FileOperations(backend)
 
-    def _handle_sandbox_file_read(self, args):
+    def _handle_file_read(self, args):
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.read(
@@ -491,12 +491,12 @@ class SandboxServer:
             limit=min(args.get("limit", 500), 2000),
         )
 
-    def _handle_sandbox_file_write(self, args):
+    def _handle_file_write(self, args):
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.write(args["path"], args["content"], machine)
 
-    def _handle_sandbox_file_patch(self, args):
+    def _handle_file_patch(self, args):
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.patch(
@@ -509,7 +509,7 @@ class SandboxServer:
             patch=args.get("patch", ""),
         )
 
-    def _handle_sandbox_file_search(self, args):
+    def _handle_file_search(self, args):
         machine = self._resolve_machine(args)
         fops = self._get_file_ops(machine)
         return fops.search(
@@ -526,7 +526,7 @@ class SandboxServer:
 
     # ---- audit_query handler ----
 
-    def _handle_sandbox_audit_query(self, args):
+    def _handle_audit_query(self, args):
         cfg = _load_config()
         log_path = cfg.audit.log_path
         if not log_path:
@@ -561,9 +561,9 @@ class SandboxServer:
             "window": [window_start, window_end],
         }
 
-    # ---- sandbox_env handler ----
+    # ---- env handler ----
 
-    def _handle_sandbox_env(self, args):
+    def _handle_env(self, args):
         action = args.get("action", "")
         params = args.get("params", {})
         return self.sandbox_env.dispatch(action, params)

@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""sandbox_env: progressive-discovery environment management.
+"""env: progressive-discovery environment management.
 
 Default actions advertised via tools/list: help, status.
 Discovered via help: machine_list, default_set, shell_new/list/remove.
@@ -87,8 +87,8 @@ HELP_RESPONSE = {
         "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
     },
     "note": (
-        "Core tools are directly exposed as sandbox_shell_exec, "
-        "sandbox_shell_read, and sandbox_file_read/write/patch/search. "
+        "Core tools are directly exposed as shell_exec, "
+        "shell_read, and file_read/write/patch/search. "
         "Machine-aware tools support optional machine."
     ),
 }
@@ -144,7 +144,7 @@ DOCKER_HELP_RESPONSE = {
             "description": (
                 "Build a Docker image from a Dockerfile already written "
                 "into a sandboxed container's /workspace/ via "
-                "sandbox_file_write.  Provide machine (default "
+                "file_write.  Provide machine (default "
                 "dockerfile=/workspace/Dockerfile, context_dir=/workspace); "
                 "sandbox-mcp maps those container paths to work_home/<machine>/ "
                 "on the host.  Inline dockerfile_content is not supported "
@@ -255,7 +255,7 @@ class SandboxEnv:
         try:
             return handler(params or {})
         except Exception as e:
-            logger.exception("sandbox_env.%s failed", action)
+            logger.exception("env.%s failed", action)
             return {"error": str(e), "type": type(e).__name__}
 
     # ---- discovery ----
