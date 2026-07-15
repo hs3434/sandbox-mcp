@@ -106,6 +106,11 @@ restart_max_retry_count = 3
 connect_timeout = 10
 socket_dir_prefix = "sandbox-mcp-ssh-"
 tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
+# Default SSH target for [default_machine] backend = "ssh":
+default_host = ""
+default_user = ""
+default_port = 22
+default_key = ""
 
 [shell]
 default_max_output = 50000
@@ -117,6 +122,12 @@ max_file_size = 51200
 default_read_limit = 500
 max_read_limit = 2000
 default_search_limit = 50
+
+[default_machine]       # opt-in: provision a default machine at startup
+enabled = false         # false = lazy (agent creates its first machine)
+backend = "docker"      # "docker" or "ssh"
+name = "default"
+purpose = ""            # backend params live in [docker] / [ssh], not here
 ```
 
 Every value can also be overridden via env var (uppercased, dots → underscores), e.g.:
@@ -129,8 +140,49 @@ SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.db sandbox-mcp
 
 The `work_home` directory is created automatically. When `docker_run` is called,
 a subdirectory `work_home/<machine-name>/` is created and bind-mounted to
-`/workspace` inside the container — the agent works in `/workspace` without
+`/workspace` inside the container - the agent works in `/workspace` without
 ever seeing a host path.
+
+### Default machine at startup
+
+By default sandbox-mcp is **lazy**: the agent creates its first machine on
+demand with `docker_run` / `ssh_connect`, and there is no default machine
+until it does. Set `[default_machine] enabled = true` to instead provision a
+default machine at startup so the agent can call `sandbox_shell_exec` /
+`sandbox_file_*` immediately:
+
+```toml
+[default_machine]
+enabled = true
+backend = "docker"     # or "ssh"
+name = "dev"
+# Docker needs nothing else here -- the image comes from [docker] default_image.
+
+# For SSH, set the target under [ssh] (backend params live in their own
+# section, not under [default_machine]):
+# [ssh]
+# default_host = "10.0.0.5"
+# default_user = "ubuntu"
+# default_port = 22
+# default_key = "/home/ubuntu/.ssh/id_ed25519"
+```
+
+Behaviour:
+
+- The `docker_ps` reconciliation pass runs first, so on a restart the
+  surviving default container is **re-adopted** (not re-created).
+- Provisioning failure is **fatal** (fail-closed): the operator opted in,
+  so a missing default machine would surprise the agent at first use. The
+  server refuses to start with a clear error instead.
+- `docker_run` is now **idempotent within a session**: if a container with
+  the requested name already exists, it reattaches (starting it if stopped)
+  rather than erroring on the name conflict. The response carries a `note`
+  ("reattached to existing container ...") so the agent knows it was a reuse.
+- `start()` / reattach **verify the container is actually running**. A
+  container whose command crashes exits within milliseconds; instead of
+  falsely reporting "running", sandbox-mcp returns `status="error"` with a
+  diagnostic (state, exit code, and a short log tail).
+
 
 ### Register with Hermes
 

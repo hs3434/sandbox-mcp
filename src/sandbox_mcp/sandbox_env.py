@@ -344,7 +344,16 @@ class SandboxEnv:
             env=params.get("env", {}),
             workdir=params.get("workdir", "/workspace"),
         )
-        return {"name": info.name, "status": info.status, "backend": "docker"}
+        # Surface status plus any diagnostic (error) and non-fatal hint
+        # (note, e.g. "reattached to existing container").  Without this
+        # the agent can't tell a fresh create from a 409 reattach, nor
+        # see why a container failed to stay running.
+        result = {"name": info.name, "status": info.status, "backend": "docker"}
+        if info.error:
+            result["error"] = info.error
+        if info.note:
+            result["note"] = info.note
+        return result
 
     def _op_docker_build(self, params):
         """Build a Docker image from a Dockerfile the agent has already

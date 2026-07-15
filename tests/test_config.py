@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_mcp.config import (
+    DefaultMachineConfig,
     DockerConfig,
     FilesConfig,
     ServerConfig,
@@ -52,6 +53,7 @@ def test_load_defaults_when_no_file(monkeypatch, tmp_path):
     assert cfg.ssh == SSHConfig()
     assert cfg.shell == ShellConfig()
     assert cfg.files == FilesConfig()
+    assert cfg.default_machine == DefaultMachineConfig()
     assert cfg.storage.work_home == (Path.home() / ".sandbox-mcp" / "workspaces").resolve()
 
 
@@ -196,3 +198,97 @@ def test_repo_example_uses_known_sections():
         f"{set(parsed.keys()) - valid_sections}; "
         f"missing sections: {valid_sections - set(parsed.keys())}"
     )
+
+
+# ---- [default_machine] ----
+
+
+def test_default_machine_defaults_disabled():
+    """Default config keeps the historical lazy behaviour (no provisioning).
+
+    [default_machine] holds only the trigger; backend params live in
+    their own sections ([docker] default_image, [ssh] default_*).
+    """
+    dm = DefaultMachineConfig()
+    assert dm.enabled is False
+    assert dm.backend == "docker"
+    assert dm.name == "default"
+    assert dm.purpose == ""
+    # No backend-specific fields here anymore.
+    assert not hasattr(dm, "image")
+    assert not hasattr(dm, "host")
+
+    ssh = SSHConfig()
+    assert ssh.default_host == ""
+    assert ssh.default_user == ""
+    assert ssh.default_port == 22
+    assert ssh.default_key == ""
+
+
+def test_default_machine_load_from_toml(monkeypatch, tmp_path):
+    """backend='ssh' target params come from [ssh] default_*, not
+    [default_machine]."""
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        """
+[default_machine]
+enabled = true
+backend = "ssh"
+name = "remote-dev"
+purpose = "auto-provisioned remote"
+
+[ssh]
+default_host = "10.0.0.5"
+default_user = "ubuntu"
+default_port = 2222
+default_key = "/home/ubuntu/.ssh/id_ed25519"
+"""
+    )
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg_file))
+    cfg = load()
+    dm = cfg.default_machine
+    assert dm.enabled is True
+    assert dm.backend == "ssh"
+    assert dm.name == "remote-dev"
+    assert dm.purpose == "auto-provisioned remote"
+    ssh = cfg.ssh
+    assert ssh.default_host == "10.0.0.5"
+    assert ssh.default_user == "ubuntu"
+    assert ssh.default_port == 2222
+    assert ssh.default_key == "/home/ubuntu/.ssh/id_ed25519"
+
+
+def test_default_machine_env_overrides(monkeypatch):
+    """[default_machine] trigger fields + [ssh] default_* env overrides."""
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "devbox")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_HOST", "10.0.0.5")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_PORT", "2200")
+    cfg = load()
+    assert cfg.default_machine.enabled is True
+    assert cfg.default_machine.name == "devbox"
+    assert cfg.ssh.default_host == "10.0.0.5"
+    assert cfg.ssh.default_port == 2200
+
+
+def test_default_machine_env_overrides_file(monkeypatch, tmp_path):
+    """Env vars win over the config file, same as every other section."""
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        """
+[default_machine]
+enabled = false
+name = "from-file"
+
+[ssh]
+default_host = "from-file-host"
+"""
+    )
+    monkeypatch.setenv("SANDBOX_MCP_CONFIG", str(cfg_file))
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "from-env")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_HOST", "from-env-host")
+    cfg = load()
+    assert cfg.default_machine.enabled is True
+    assert cfg.default_machine.name == "from-env"
+    assert cfg.ssh.default_host == "from-env-host"

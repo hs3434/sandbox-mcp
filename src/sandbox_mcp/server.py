@@ -318,6 +318,80 @@ class SandboxServer:
             self.sandbox_env.dispatch("docker_ps", {})
         except Exception:
             logger.exception("startup bootstrap: docker_ps failed")
+        # Provision a default machine when opted in ([default_machine]
+        # enabled).  Provisioning failure is fatal: the operator asked
+        # for a guaranteed default, so surprising the agent at first use
+        # is worse than refusing to start.  Runs after docker_ps so a
+        # surviving default container is re-adopted, not re-created.
+        self._provision_default_machine()
+
+    def _provision_default_machine(self) -> None:
+        """Create the configured default machine at startup (opt-in).
+
+        See :class:`~sandbox_mcp.config.DefaultMachineConfig`.  When
+        ``enabled`` is false this is a no-op (the historical lazy
+        behaviour).  When enabled, a provisioning failure raises
+        ``RuntimeError`` and the server refuses to start.
+        """
+        cfg = _load_config().default_machine
+        if not cfg.enabled:
+            return
+        name = cfg.name
+        if name in self.machines.list_machines():
+            # docker_ps reconciliation already re-adopted it (e.g. the
+            # container survived a server restart).  Just make sure it's
+            # the default.
+            self.machines.set_default(name)
+            logger.info("default machine %r already registered (reattached)", name)
+            return
+
+        logger.info("provisioning default machine %r via %s backend", name, cfg.backend)
+        try:
+            if cfg.backend == "docker":
+                # No image override here: the default machine reuses
+                # [docker] default_image (backend-specific config lives
+                # in its own section, not under [default_machine]).
+                info = self.machines.register(
+                    name,
+                    self._docker_backend,
+                    purpose=cfg.purpose,
+                )
+            elif cfg.backend == "ssh":
+                ssh_cfg = _load_config().ssh
+                if not ssh_cfg.default_host or not ssh_cfg.default_user:
+                    raise RuntimeError(
+                        "[default_machine] backend='ssh' requires "
+                        "[ssh] default_host and default_user"
+                    )
+                info = self.machines.register(
+                    name,
+                    self._ssh_backend,
+                    purpose=cfg.purpose,
+                    host=ssh_cfg.default_host,
+                    user=ssh_cfg.default_user,
+                    port=ssh_cfg.default_port,
+                    key=ssh_cfg.default_key or None,
+                )
+            else:
+                raise RuntimeError(
+                    f"[default_machine] unknown backend: {cfg.backend!r} "
+                    "(expected 'docker' or 'ssh')"
+                )
+        except Exception as e:
+            raise RuntimeError(
+                f"failed to provision default machine {name!r} via {cfg.backend}: {e}"
+            ) from e
+
+        if info.status != "running":
+            raise RuntimeError(
+                f"failed to provision default machine {name!r} via {cfg.backend}: "
+                f"{getattr(info, 'error', None) or info.status}"
+            )
+        self.machines.set_default(name)
+        detail = f" ({cfg.backend} backend)"
+        if info.note:
+            detail += f": {info.note}"
+        logger.info("default machine %r ready%s", name, detail)
 
     def list_tools(self):
         tools = [ToolDef(t["name"], t["description"], t["inputSchema"]) for t in TOOL_DEFINITIONS]

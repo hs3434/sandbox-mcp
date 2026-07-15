@@ -83,6 +83,15 @@ connect_timeout = 10
 socket_dir_prefix = "sandbox-mcp-ssh-"
 tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
 
+# Default SSH target used when [default_machine] backend = "ssh".
+# Leaving default_host empty disables the SSH default machine.
+# The machine name/purpose come from [default_machine]; only the
+# connection params live here.
+default_host = ""
+default_user = ""
+default_port = 22
+default_key = ""           # empty -> ssh-agent / default key
+
 [shell]
 # Buffer sizes and the default per-call output cap (in bytes).
 # HEAD_SIZE captures the start of the stream; TAIL_SIZE is a ring buffer
@@ -100,3 +109,22 @@ max_line_length = 2000
 default_read_limit = 500
 max_read_limit = 2000
 default_search_limit = 50
+
+[default_machine]
+# Opt-in: provision a default machine at startup so the agent can use
+# sandbox_shell_exec / sandbox_file_* immediately, without an explicit
+# docker_run / ssh_connect.  Disabled by default -- the historical
+# behaviour is lazy (the agent creates its first machine on demand).
+#
+# Provisioning failure is FATAL: when enabled, the server refuses to
+# start if the default machine can't be brought up (fail-closed).  The
+# docker_ps reconciliation pass runs first, so on a restart the
+# surviving container is re-adopted instead of re-created.
+#
+# This section holds only the trigger.  Backend-specific params live in
+# their own sections: docker image = [docker] default_image; SSH target
+# = [ssh] default_host / default_user / default_port / default_key.
+enabled = false
+backend = "docker"       # "docker" or "ssh"
+name = "default"
+purpose = ""

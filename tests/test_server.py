@@ -154,3 +154,152 @@ def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
         actions = [r[0] for r in conn.execute("SELECT action FROM audit").fetchall()]
     # Only the pre-existing row is present; the query did not record itself.
     assert actions == ["pre_existing"]
+
+
+# ---- [default_machine] startup provisioning ----
+
+
+def test_provision_default_machine_disabled_is_noop(monkeypatch):
+    """Default config (enabled=false): no provisioning, no default machine."""
+    monkeypatch.delenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", raising=False)
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        srv = SandboxServer()
+    mock_docker_cls.return_value.create.assert_not_called()
+    assert srv.machines.get_default() is None
+
+
+def test_provision_default_machine_docker(monkeypatch):
+    """enabled=true + docker backend -> default machine created and set."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_BACKEND", "docker")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "dev")
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker = mock_docker_cls.return_value
+        mock_docker.create.return_value = TargetInfo(
+            name="dev", backend="docker", status="running", image="python:3.12"
+        )
+        srv = SandboxServer()
+
+    mock_docker.create.assert_called_once()
+    # No image kwarg is forwarded by provisioning -- the docker backend
+    # falls back to [docker] default_image inside create().
+    assert "image" not in mock_docker.create.call_args.kwargs
+    assert srv.machines.get_default() == "dev"
+    assert srv.machines.list_machines() == ["dev"]
+
+
+def test_provision_default_machine_docker_surfaces_reattach_note(monkeypatch):
+    """When create() reattaches (409) it returns a note; provisioning
+    still succeeds (status=running) and logs the note."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker_cls.return_value.create.return_value = TargetInfo(
+            name="default",
+            backend="docker",
+            status="running",
+            note="reattached to existing container (already running)",
+        )
+        srv = SandboxServer()
+    assert srv.machines.get_default() == "default"
+
+
+def test_provision_default_machine_ssh(monkeypatch):
+    """enabled=true + ssh backend -> connects via [ssh] default_* and
+    sets the default machine."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_BACKEND", "ssh")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "remote")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_HOST", "10.0.0.5")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_USER", "ubuntu")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_PORT", "2222")
+    monkeypatch.setenv("SANDBOX_MCP_SSH_DEFAULT_KEY", "/k/id_ed25519")
+    with (
+        patch("sandbox_mcp.server.DockerBackend"),
+        patch("sandbox_mcp.server.SSHBackend") as mock_ssh_cls,
+    ):
+        mock_ssh = mock_ssh_cls.return_value
+        mock_ssh.create.return_value = TargetInfo(name="remote", backend="ssh", status="running")
+        srv = SandboxServer()
+
+    mock_ssh.create.assert_called_once()
+    kwargs = mock_ssh.create.call_args.kwargs
+    assert kwargs["host"] == "10.0.0.5"
+    assert kwargs["user"] == "ubuntu"
+    assert kwargs["port"] == 2222
+    assert kwargs["key"] == "/k/id_ed25519"
+    assert srv.machines.get_default() == "remote"
+
+
+def test_provision_default_machine_failure_raises(monkeypatch):
+    """enabled=true + backend raises -> RuntimeError, server refuses to start."""
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_BACKEND", "docker")
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker_cls.return_value.create.side_effect = Exception("daemon unreachable")
+        with pytest.raises(RuntimeError, match="failed to provision default machine"):
+            SandboxServer()
+
+
+def test_provision_default_machine_error_info_raises(monkeypatch):
+    """create() returns a non-running TargetInfo -> RuntimeError (fail-closed)."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker_cls.return_value.create.return_value = TargetInfo(
+            name="default", backend="docker", status="error", error="image pull failed"
+        )
+        with pytest.raises(RuntimeError, match="image pull failed"):
+            SandboxServer()
+
+
+def test_provision_default_machine_reattaches_when_already_adopted(monkeypatch):
+    """If docker_ps already adopted the default name, provisioning just
+    sets it as default - no second create()."""
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "dev")
+    with (
+        patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
+        patch("sandbox_mcp.server.SSHBackend"),
+    ):
+        mock_docker = mock_docker_cls.return_value
+        attrs = {"State": {"Status": "running"}, "Config": {"Image": "alpine:3"}}
+        mock_docker.list_managed_containers.return_value = [("dev", attrs)]
+        srv = SandboxServer()
+
+    # docker_ps adopted "dev"; provisioning must not create again.
+    mock_docker.create.assert_not_called()
+    assert srv.machines.get_default() == "dev"
+
+
+def test_provision_default_machine_ssh_requires_host_and_user(monkeypatch):
+    """backend='ssh' without [ssh] default_host/default_user -> RuntimeError."""
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_BACKEND", "ssh")
+    with (
+        patch("sandbox_mcp.server.DockerBackend"),
+        patch("sandbox_mcp.server.SSHBackend"),
+        pytest.raises(RuntimeError, match=r"requires.*default_host and default_user"),
+    ):
+        SandboxServer()

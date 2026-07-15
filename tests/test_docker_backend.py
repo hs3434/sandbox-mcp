@@ -581,3 +581,144 @@ def test_create_empty_auto_network_omits_network(
     assert info.status == "running"
     run_kwargs = mock_client.containers.run.call_args.kwargs
     assert run_kwargs.get("network") is None
+
+
+# ---- create() idempotent reattach on name conflict (409) ----
+
+
+def _conflict_error():
+    """A docker APIError whose status_code is 409 (name already in use).
+
+    The docker SDK parses the daemon's JSON body into ``explanation``;
+    create() renders the error via ``e.explanation or e``, so we set it
+    to the realistic conflict message.
+    """
+    from docker.errors import APIError
+
+    return APIError(
+        "Conflict. The container name '/dev' is already in use",
+        response=MagicMock(status_code=409),
+        explanation="Conflict. The container name '/dev' is already in use by container abc123",
+    )
+
+
+def test_docker_create_reattaches_running_container_on_conflict(docker_backend, mock_client):
+    """A 409 from containers.run reattaches to the existing *running*
+    container instead of erroring - the idempotent docker_run contract.
+    The response carries a note so the agent knows it was a reuse.
+    """
+    mock_client.containers.run.side_effect = _conflict_error()
+    existing = mock_client.containers.get.return_value
+    existing.attrs = {"State": {"Status": "running"}}
+
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+
+    assert info.status == "running", f"expected reattach, got {info!r}"
+    assert info.name == "dev"
+    assert "reattached" in info.note
+    assert "already running" in info.note
+    # run was attempted (and conflicted); get located the existing container.
+    mock_client.containers.run.assert_called_once()
+    mock_client.containers.get.assert_called_once_with("dev")
+    # Already running -> no start.
+    existing.start.assert_not_called()
+
+
+def test_docker_create_reattaches_and_starts_stopped_container(docker_backend, mock_client):
+    """A 409 against a *stopped* container starts it, then reports running.
+
+    reload() flips the daemon's reported state to "running" after start
+    (the mock simulates this); _running_info confirms it before reporting.
+    """
+    mock_client.containers.run.side_effect = _conflict_error()
+    existing = MagicMock()
+    existing.attrs = {"State": {"Status": "exited"}}
+
+    def _reload():
+        existing.attrs = {"State": {"Status": "running"}}
+
+    existing.reload.side_effect = _reload
+    mock_client.containers.get.return_value = existing
+
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+
+    assert info.status == "running"
+    existing.start.assert_called_once_with()
+    assert "reattached" in info.note
+    assert "started" in info.note
+
+
+def test_docker_create_reattach_start_fails_to_run(docker_backend, mock_client):
+    """Reattach starts a stopped container, but its command crashes
+    immediately -- create() reports the error with a diagnostic, NOT
+    "running".  start() returning is not a guarantee the container stays up.
+    """
+    mock_client.containers.run.side_effect = _conflict_error()
+    existing = MagicMock()
+    existing.attrs = {"State": {"Status": "exited", "ExitCode": 1}}
+    existing.logs.return_value = b"boom: missing dependency\n"
+    # reload() leaves attrs as-is (still exited) -- the container died.
+    mock_client.containers.get.return_value = existing
+
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "error"
+    assert "exited" in info.error
+    assert "exit_code=1" in info.error
+    assert "boom: missing dependency" in info.error
+
+
+def test_docker_start_returns_error_when_container_exits(docker_backend, mock_client):
+    """docker_start must verify the container is actually running.  A
+    container whose command crashes exits within milliseconds of start();
+    reporting "running" would mislead the agent into shelling into a
+    dead container.  Instead surface status + exit code + a log tail.
+    """
+    container = mock_client.containers.get.return_value
+    container.attrs = {"State": {"Status": "exited", "ExitCode": 127}}
+    container.logs.return_value = b"sleep: command not found\n"
+
+    info = docker_backend.start("dev")
+    container.start.assert_called_once()
+    assert info.status == "error"
+    assert "exited" in info.error
+    assert "exit_code=127" in info.error
+    assert "sleep: command not found" in info.error
+
+
+def test_docker_create_conflict_then_get_notfound_returns_error(docker_backend, mock_client):
+    """Race: run reports 409 but the container is gone by the get() lookup.
+    Reattach returns None and the original conflict error surfaces.
+    """
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.run.side_effect = _conflict_error()
+    mock_client.containers.get.side_effect = DockerNotFound("vanished")
+
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "error"
+    assert "already in use" in str(info.error)
+
+
+def test_docker_create_non_conflict_apierror_does_not_reattach(docker_backend, mock_client):
+    """A non-409 APIError (e.g. daemon 500) is a real error - no reattach."""
+    from docker.errors import APIError
+
+    mock_client.containers.run.side_effect = APIError("boom", response=MagicMock(status_code=500))
+
+    info = docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert info.status == "error"
+    # Reattach path never runs, so containers.get is never consulted.
+    mock_client.containers.get.assert_not_called()
+
+
+def test_docker_create_image_not_found_returns_specific_error(docker_backend, mock_client):
+    """ImageNotFound is a subclass of APIError; it must be caught before
+    the APIError branch so the 'image not found' message is preserved
+    (previously the broader APIError handler swallowed it).
+    """
+    from docker.errors import ImageNotFound
+
+    mock_client.containers.run.side_effect = ImageNotFound("nope")
+    info = docker_backend.create(name="dev", purpose="test", image="nonexistent:latest")
+    assert info.status == "error"
+    assert "Image nonexistent:latest not found" in str(info.error)

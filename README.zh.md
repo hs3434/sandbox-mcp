@@ -101,6 +101,11 @@ restart_max_retry_count = 3
 connect_timeout = 10
 socket_dir_prefix = "sandbox-mcp-ssh-"
 tmpfile_pattern = ".sandbox-mcp-tmp.XXXXXX"
+# [default_machine] backend = "ssh" 时使用的默认 SSH 目标：
+default_host = ""
+default_user = ""
+default_port = 22
+default_key = ""
 
 [shell]
 default_max_output = 50000
@@ -112,6 +117,12 @@ max_file_size = 51200
 default_read_limit = 500
 max_read_limit = 2000
 default_search_limit = 50
+
+[default_machine]       # 可选：启动时自动准备一个默认 machine
+enabled = false         # false = 懒加载（agent 自己创建首个 machine）
+backend = "docker"      # "docker" 或 "ssh"
+name = "default"
+purpose = ""            # 后端参数在 [docker] / [ssh] 里，不在这里
 ```
 
 每个值都能用环境变量覆盖（大写、点 → 下划线）：
@@ -123,8 +134,44 @@ SANDBOX_MCP_AUDIT_LOG_PATH=/var/log/sandbox-mcp/audit.db sandbox-mcp
 ```
 
 `work_home` 目录会自动创建。`docker_run` 被调用时，会在 `work_home/<机器名>/`
-下创建子目录并 bind-mount 到容器内的 `/workspace` —— agent 在 `/workspace`
+下创建子目录并 bind-mount 到容器内的 `/workspace` -- agent 在 `/workspace`
 工作，**永远看不到宿主路径**。
+
+### 启动时准备默认 machine
+
+默认情况下 sandbox-mcp 是**懒加载**的：agent 用 `docker_run` / `ssh_connect`
+按需创建首个 machine，在此之前没有默认 machine。设置
+`[default_machine] enabled = true` 可在启动时直接准备一个默认 machine，
+这样 agent 一上来就能用 `sandbox_shell_exec` / `sandbox_file_*`：
+
+```toml
+[default_machine]
+enabled = true
+backend = "docker"     # 或 "ssh"
+name = "dev"
+# docker 在这里不需要别的，镜像用 [docker] default_image。
+
+# SSH 的话，目标写在 [ssh] 下（后端参数在各自段落，不放 [default_machine]）：
+# [ssh]
+# default_host = "10.0.0.5"
+# default_user = "ubuntu"
+# default_port = 22
+# default_key = "/home/ubuntu/.ssh/id_ed25519"
+```
+
+行为：
+
+- `docker_ps` 认领流程会先跑，所以重启后存活的默认容器会被**重新认领**
+  （而不是重建）。
+- 准备失败是**致命的**（fail-closed）：既然你开启了此选项，启动时拿不到
+  默认 machine 就会让 agent 在首次使用时踩空，不如直接拒绝启动并报清晰错误。
+- `docker_run` 现在**会话内幂等**：若同名容器已存在，会重新挂载（已停止则
+  启动），而不是因名字冲突报错。响应里带 `note`（"reattached to existing
+  container ..."），让 agent 知道这是复用而非新建。
+- `start()` / 重新挂载会**验证容器是否真的在运行**。容器命令崩溃会在毫秒级
+  退出；此时不会谎报 "running"，而是返回 `status="error"` 并附诊断（状态、
+  退出码、日志尾部）。
+
 
 ### 注册到 Hermes
 

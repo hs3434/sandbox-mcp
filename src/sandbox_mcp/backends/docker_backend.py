@@ -324,21 +324,34 @@ class DockerBackend(Backend):
                     "sandbox-mcp.machine": name,
                 },
             )
-        except _docker_module().errors.APIError as e:
-            return TargetInfo(
-                name=name,
-                backend="docker",
-                status="error",
-                purpose=purpose,
-                error=str(e.explanation or e),
-            )
         except _docker_module().errors.ImageNotFound:
+            # ImageNotFound is a subclass of APIError - it MUST be caught
+            # first, otherwise the APIError handler below swallows it and
+            # the specific "image not found" message is lost.
             return TargetInfo(
                 name=name,
                 backend="docker",
                 status="error",
                 purpose=purpose,
                 error=f"Image {image} not found",
+            )
+        except _docker_module().errors.APIError as e:
+            # HTTP 409 Conflict == a container with this name already
+            # exists (e.g. the agent called docker_run twice in one
+            # session, or the daemon still has the container from a
+            # previous run that docker_ps reconciliation didn't see).
+            # Reattach to it instead of failing - this is the
+            # idempotent "reattach" behaviour documented for docker_run.
+            if getattr(e, "status_code", None) == 409:
+                reattached = self._reattach_existing(name, purpose, image)
+                if reattached is not None:
+                    return reattached
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="error",
+                purpose=purpose,
+                error=str(e.explanation or e),
             )
 
         self._started_at[name] = time.time()
@@ -353,16 +366,121 @@ class DockerBackend(Backend):
             image=image,
         )
 
+    def _reattach_existing(self, name: str, purpose: str, image: str) -> TargetInfo | None:
+        """Adopt an already-existing container after a name-conflict (409).
+
+        Called from :meth:`create` when ``containers.run`` reports the
+        name is taken.  Looks the container up, starts it if it isn't
+        running, and returns a :class:`TargetInfo` reflecting its TRUE
+        state.  Returns ``None`` if the container vanished between the
+        conflict and the lookup (a race) so the caller can surface the
+        original error.
+
+        The container's labels/volumes are trusted as-is: it was either
+        created by a previous ``create()`` call (same labels) or already
+        reconciled by ``docker_ps``.  We do not reconfigure it.
+
+        The returned info carries a ``note`` ("reattached to existing
+        container ...") so the agent knows this was a reuse, not a fresh
+        create, and that prior filesystem state may have been preserved.
+        """
+        docker_errors = _docker_module().errors
+        try:
+            container = self._ensure_client().containers.get(name)
+        except docker_errors.NotFound:
+            return None
+        status = container.attrs.get("State", {}).get("Status", "unknown")
+        if status != "running":
+            try:
+                container.start()
+            except docker_errors.APIError as e:
+                return TargetInfo(
+                    name=name,
+                    backend="docker",
+                    status="error",
+                    purpose=purpose,
+                    image=image,
+                    error=f"container exists but failed to start: {e}",
+                )
+            note = "reattached to existing container (started; was stopped)"
+        else:
+            note = "reattached to existing container (already running)"
+        return self._running_info(container, name, purpose=purpose, image=image, note=note)
+
+    def _running_info(
+        self, container, name: str, purpose: str = "", image: str = "", note: str = ""
+    ) -> TargetInfo:
+        """Build a TargetInfo reflecting the container's TRUE state after a
+        start attempt.
+
+        ``container.start()`` (and ``containers.run(detach=True)``) return
+        as soon as the start request is accepted -- they do NOT wait for
+        the container's process to keep running.  A container whose
+        command crashes (bad image, missing binary, OOM) enters
+        "exited"/"dead" within milliseconds.  Blindly reporting
+        "running" would mislead the agent into shelling into a dead
+        container.
+
+        This reloads the container's attrs and inspects ``State``: if
+        running, returns a ``running`` info (carrying ``note``);
+        otherwise returns an ``error`` info with a diagnostic (status,
+        exit code, and a short tail of the container's logs) so the
+        operator can see *why* it won't run.
+        """
+        docker_errors = _docker_module().errors
+        # attrs may be stale if reload fails; inspect whatever we have.
+        with contextlib.suppress(docker_errors.APIError):
+            container.reload()
+        state = (container.attrs or {}).get("State", {}) or {}
+        status = state.get("Status", "unknown")
+        if status == "running":
+            self._started_at[name] = time.time()
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="running",
+                purpose=purpose,
+                image=image,
+                note=note,
+            )
+        # Not running -- assemble a diagnostic hint.
+        parts = [f"container is {status!r} after start"]
+        exit_code = state.get("ExitCode")
+        if exit_code not in (None, 0):
+            parts.append(f"exit_code={exit_code}")
+        err = state.get("Error")
+        if err:
+            parts.append(f"error={err!r}")
+        try:
+            tail = container.logs(tail=20)
+            if isinstance(tail, bytes):
+                tail = tail.decode("utf-8", "replace")
+            tail = tail.strip()
+            if tail:
+                parts.append("last logs:\n" + tail[:1000])
+        except Exception:
+            pass
+        return TargetInfo(
+            name=name,
+            backend="docker",
+            status="error",
+            purpose=purpose,
+            image=image,
+            error="; ".join(parts),
+        )
+
     def start(self, name: str) -> TargetInfo:
         docker = _docker_module()
         container_name = name
         try:
             container = self._ensure_client().containers.get(container_name)
             container.start()
-            self._started_at[name] = self._started_at.get(name, time.time())
-            return TargetInfo(name=name, backend="docker", status="running")
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return TargetInfo(name=name, backend="docker", status="error", error=str(e))
+        # Verify the container is actually running: start() returns as
+        # soon as the request is accepted, but a crashing command exits
+        # immediately.  Report the real state + a diagnostic if it died.
+        return self._running_info(container, name)
 
     def stop(self, name: str) -> TargetInfo:
         docker = _docker_module()

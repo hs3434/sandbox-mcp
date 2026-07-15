@@ -102,6 +102,14 @@ class SSHConfig:
     connect_timeout: int = 10
     socket_dir_prefix: str = "sandbox-mcp-ssh-"
     tmpfile_pattern: str = ".sandbox-mcp-tmp.XXXXXX"
+    # Default SSH target used when [default_machine] backend = "ssh".
+    # Leaving ``default_host`` empty disables the SSH default machine.
+    # These are connection params only; the machine name/purpose come
+    # from [default_machine].
+    default_host: str = ""
+    default_user: str = ""
+    default_port: int = 22
+    default_key: str = ""  # empty -> ssh-agent / default key
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,34 @@ class FilesConfig:
 
 
 @dataclass(frozen=True)
+class DefaultMachineConfig:
+    """Opt-in default machine provisioned at startup.
+
+    When ``enabled`` is true, ``SandboxServer.__init__`` provisions a
+    machine (via the docker or ssh backend) right after the
+    ``docker_ps`` reconciliation pass, so the agent can use
+    ``sandbox_shell_exec`` / ``sandbox_file_*`` immediately without an
+    explicit ``docker_run`` / ``ssh_connect``.
+
+    Provisioning failure is **fatal**: the operator opted in, so a
+    missing default machine would surprise the agent at first use --
+    the server refuses to start instead.  Disabled by default to
+    preserve the historical lazy behaviour.
+
+    This section holds only the *trigger* (whether, which backend, what
+    name).  Backend-specific connection params live in their own
+    sections: docker image comes from ``[docker] default_image``; the
+    SSH target comes from ``[ssh] default_host`` / ``default_user`` /
+    ``default_port`` / ``default_key``.
+    """
+
+    enabled: bool = False
+    backend: str = "docker"  # "docker" or "ssh"
+    name: str = "default"
+    purpose: str = ""
+
+
+@dataclass(frozen=True)
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -129,6 +165,7 @@ class AppConfig:
     ssh: SSHConfig = field(default_factory=SSHConfig)
     shell: ShellConfig = field(default_factory=ShellConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
+    default_machine: DefaultMachineConfig = field(default_factory=DefaultMachineConfig)
 
 
 def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
@@ -141,6 +178,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "ssh": {},
         "shell": {},
         "files": {},
+        "default_machine": {},
     }
 
     env_map: dict[str, tuple[str, str, Callable[[str], object]]] = {
@@ -161,6 +199,10 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "ssh_connect_timeout": ("ssh", "connect_timeout", int),
         "ssh_socket_dir_prefix": ("ssh", "socket_dir_prefix", str),
         "ssh_tmpfile_pattern": ("ssh", "tmpfile_pattern", str),
+        "ssh_default_host": ("ssh", "default_host", str),
+        "ssh_default_user": ("ssh", "default_user", str),
+        "ssh_default_port": ("ssh", "default_port", int),
+        "ssh_default_key": ("ssh", "default_key", str),
         "shell_default_max_output": ("shell", "default_max_output", int),
         "shell_head_size": ("shell", "head_size", int),
         "shell_tail_size": ("shell", "tail_size", int),
@@ -169,6 +211,10 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "files_default_read_limit": ("files", "default_read_limit", int),
         "files_max_read_limit": ("files", "max_read_limit", int),
         "files_default_search_limit": ("files", "default_search_limit", int),
+        "default_machine_enabled": ("default_machine", "enabled", _as_bool),
+        "default_machine_backend": ("default_machine", "backend", str),
+        "default_machine_name": ("default_machine", "name", str),
+        "default_machine_purpose": ("default_machine", "purpose", str),
     }
 
     for env_suffix, (section, field_name, coerce) in env_map.items():
@@ -191,6 +237,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         ssh=_replace("ssh", cfg.ssh),
         shell=_replace("shell", cfg.shell),
         files=_replace("files", cfg.files),
+        default_machine=_replace("default_machine", cfg.default_machine),
     )
 
 
@@ -211,6 +258,7 @@ def _build_from_dict(data: dict) -> AppConfig:
         ssh=section("ssh", SSHConfig),
         shell=section("shell", ShellConfig),
         files=section("files", FilesConfig),
+        default_machine=section("default_machine", DefaultMachineConfig),
     )
 
 

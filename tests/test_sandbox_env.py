@@ -155,6 +155,41 @@ def test_docker_run(sandbox_env):
     assert result["backend"] == "docker"
 
 
+def test_docker_run_surfaces_reattach_note_and_error(sandbox_env):
+    """docker_run's response carries the backend's non-fatal note (e.g. a
+    409 reattach) and any error diagnostic, so the agent can tell a fresh
+    create from a reuse and see why a container failed to stay running.
+    """
+    from sandbox_mcp.backends.base import TargetInfo
+
+    # Reattach success: running + note, no error.
+    info = TargetInfo(
+        name="dev",
+        backend="docker",
+        status="running",
+        note="reattached to existing container (already running)",
+    )
+    sandbox_env._machines.register.return_value = info
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
+    assert result["status"] == "running"
+    assert result["note"] == "reattached to existing container (already running)"
+    assert "error" not in result
+
+    # Failed to stay running: error + status, no note.
+    info = TargetInfo(
+        name="dev", backend="docker", status="error", error="container is 'exited' after start"
+    )
+    sandbox_env._machines.register.return_value = info
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
+    assert result["status"] == "error"
+    assert result["error"] == "container is 'exited' after start"
+    assert "note" not in result
+
+
 def test_docker_commit_requires_image_tag(sandbox_env):
     """docker_commit must reject calls without image_tag (no auto-default)."""
     result = sandbox_env.dispatch("docker_commit", {"machine": "dev"})

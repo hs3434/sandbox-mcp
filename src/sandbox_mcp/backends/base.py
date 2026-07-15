@@ -37,6 +37,11 @@ class TargetInfo:
     # ``machine_list`` to render rich views without re-querying the daemon.
     image: str = ""
     created: str = ""
+    # Human-readable, non-fatal hint for the operator/agent.  Used to
+    # surface things like "reattached to an existing container (not a
+    # fresh create)" so the agent knows state may have been preserved.
+    # Distinct from ``error`` (which marks status="error").
+    note: str = ""
 
 
 class Backend(ABC):
