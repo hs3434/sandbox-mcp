@@ -641,6 +641,63 @@ class DockerBackend(Backend):
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
 
+    def inspect(self, name: str, raw: bool = False) -> dict:
+        """Return curated container config, or full ``attrs`` when ``raw=True``.
+
+        Curated view deliberately omits ``Config.Env``, ``Config.WorkingDir``,
+        ``Config.User``, and ``NetworkSettings.IPAddress`` — agents get
+        those from :func:`sandbox_shell_exec` (``env`` / ``pwd`` / ``whoami``
+        / ``hostname -i``).  The curated set focuses on what ``shell_exec``
+        cannot answer: state, cmd, mounts, labels, restart policy.
+        """
+        docker = _docker_module()
+        try:
+            container = self._ensure_client().containers.get(name)
+            container.reload()
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        if raw:
+            return container.attrs
+
+        state = (container.attrs.get("State") or {})
+        config = (container.attrs.get("Config") or {})
+        host_cfg = (container.attrs.get("HostConfig") or {})
+        restart = host_cfg.get("RestartPolicy") or {}
+        health = state.get("Health") or {}
+
+        return {
+            "id": container.short_id,
+            "name": name,
+            "image": config.get("Image", ""),
+            "created": container.attrs.get("Created", ""),
+            "started_at": state.get("StartedAt", ""),
+            "finished_at": state.get("FinishedAt", ""),
+            "state": {
+                "status": state.get("Status", "unknown"),
+                "running": bool(state.get("Running", False)),
+                "exit_code": state.get("ExitCode", 0),
+                "error": state.get("Error", "") or "",
+                "restart_count": state.get("RestartCount", 0),
+                "health": health.get("Status", "") or "",
+            },
+            "cmd": list(config.get("Cmd") or []) or None,
+            "entrypoint": list(config.get("Entrypoint") or []) or None,
+            "mounts": [
+                {
+                    "source": m.get("Source", ""),
+                    "destination": m.get("Destination", ""),
+                    "mode": m.get("Mode", ""),
+                }
+                for m in (container.attrs.get("Mounts") or [])
+            ],
+            "labels": dict(config.get("Labels") or {}),
+            "restart_policy": {
+                "name": restart.get("Name", ""),
+                "max_retry": restart.get("MaximumRetryCount", 0),
+            },
+        }
+
     def build(
         self,
         image_tag: str,

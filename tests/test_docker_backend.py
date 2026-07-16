@@ -969,3 +969,102 @@ def test_docker_create_image_not_found_returns_specific_error(docker_backend, mo
     info = docker_backend.create(name="dev", purpose="test", image="nonexistent:latest")
     assert info.status == "error"
     assert "Image nonexistent:latest not found" in str(info.error)
+
+
+def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
+    """Curated inspect returns a flattened, agent-friendly dict with only
+    fields `shell_exec` can't easily surface (state, cmd, mounts, labels,
+    restart_policy).  Env / working_dir / user / network IP are deliberately
+    omitted — those are `shell_exec env` / `pwd` / `whoami` / `hostname -i`.
+    """
+    container = mock_client.containers.get.return_value
+    container.attrs = {
+        "State": {
+            "Status": "running",
+            "Running": True,
+            "ExitCode": 0,
+            "Error": "",
+            "RestartCount": 2,
+            "StartedAt": "2026-07-16T10:00:01Z",
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "Health": {"Status": "healthy"},
+        },
+        "Config": {
+            "Image": "python:3.12-slim",
+            "Cmd": ["python", "-m", "http.server"],
+            "Entrypoint": None,
+            "Labels": {
+                "sandbox-mcp.managed": "true",
+                "sandbox-mcp.machine": "dev",
+                "sandbox-mcp.purpose": "Python dev",
+            },
+        },
+        "Created": "2026-07-16T10:00:00Z",
+        "HostConfig": {"RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}},
+        "Mounts": [
+            {"Source": "/host/x", "Destination": "/workspace", "Mode": "rw"},
+            {"Source": "/host/share", "Destination": "/workspace/share", "Mode": "ro"},
+        ],
+    }
+    container.short_id = "abc123def456"
+
+    result = docker_backend.inspect("dev")
+
+    assert result["id"] == "abc123def456"
+    assert result["name"] == "dev"
+    assert result["image"] == "python:3.12-slim"
+    assert result["created"] == "2026-07-16T10:00:00Z"
+    assert result["started_at"] == "2026-07-16T10:00:01Z"
+    assert result["finished_at"] == "0001-01-01T00:00:00Z"
+    assert result["state"]["status"] == "running"
+    assert result["state"]["running"] is True
+    assert result["state"]["exit_code"] == 0
+    assert result["state"]["restart_count"] == 2
+    assert result["state"]["health"] == "healthy"
+    assert result["cmd"] == ["python", "-m", "http.server"]
+    assert result["entrypoint"] is None
+    assert result["mounts"] == [
+        {"source": "/host/x", "destination": "/workspace", "mode": "rw"},
+        {"source": "/host/share", "destination": "/workspace/share", "mode": "ro"},
+    ]
+    assert result["labels"]["sandbox-mcp.purpose"] == "Python dev"
+    assert result["restart_policy"] == {"name": "unless-stopped", "max_retry": 0}
+    # Deliberately omitted (shell_exec can answer):
+    assert "env" not in result
+    assert "working_dir" not in result
+    assert "user" not in result
+    assert "network" not in result
+
+
+def test_docker_inspect_raw_returns_full_attrs(docker_backend, mock_client):
+    """raw=True returns the unfiltered attrs dict — agent can read every
+    key including Config.Env values and full NetworkSettings."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {
+        "State": {"Status": "running"},
+        "Config": {
+            "Image": "alpine:3",
+            "Env": ["POSTGRES_PASSWORD=hunter2"],
+            "Cmd": ["sleep", "infinity"],
+        },
+    }
+
+    result = docker_backend.inspect("dev", raw=True)
+
+    assert result is container.attrs
+    assert result["Config"]["Env"] == ["POSTGRES_PASSWORD=hunter2"]
+
+
+def test_docker_inspect_container_not_found(docker_backend, mock_client):
+    """Container that disappears between calls returns error dict, not raise."""
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.get.side_effect = DockerNotFound("not here")
+
+    result = docker_backend.inspect("ghost")
+
+    assert result["status"] == "error"
+    assert "not here" in result["error"]
+
+
+
