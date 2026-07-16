@@ -410,6 +410,3 @@ Skip-by-default; enabled when a docker daemon is reachable.
    this PR: **ship raw=true unconditionally; defer the config knob
    until someone asks for it.** Reversible later — adding a knob is
    non-breaking; locking down existing behaviour would be.
-2. **`since` / `until` relative time format** — Docker SDK accepts
-   RFC 3339 timestamps and Go duration strings (`"10m"`, `"1h"`).
-   Both are well-defined; no ambiguity. No action needed.
