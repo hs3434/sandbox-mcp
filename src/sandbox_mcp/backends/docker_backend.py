@@ -783,6 +783,85 @@ class DockerBackend(Backend):
             "summary": {"added": len(added), "changed": len(changed), "deleted": len(deleted)},
         }
 
+    def stats(self, name: str, *, stream: bool = False) -> dict:
+        """One-shot resource snapshot.  Streaming is explicitly refused —
+        the MCP tool-call model is request/response; live monitoring is
+        a loop of repeated ``stats()`` calls.
+        """
+        if stream:
+            return {
+                "error": (
+                    "streaming is not supported; "
+                    "call docker_stats again for the next snapshot"
+                ),
+                "status": "error",
+            }
+        docker = _docker_module()
+        try:
+            container = self._ensure_client().containers.get(name)
+            raw = container.stats(stream=False)
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        cpu = self._compute_cpu_percent(raw)
+        mem = self._compute_memory(raw)
+        net = self._compute_network(raw)
+        blk = self._compute_block_io(raw)
+
+        return {
+            "cpu_percent": cpu,
+            "memory": mem,
+            "network": net,
+            "block_io": blk,
+        }
+
+    @staticmethod
+    def _compute_cpu_percent(raw: dict) -> float:
+        """Standard docker CPU% formula in single-snapshot form.
+
+        ``cpu_delta / system_delta * num_cpus * 100``; returns 0 when
+        system_delta is 0 (first sample or zero-elapsed case).
+        """
+        cpu_stats = raw.get("cpu_stats") or {}
+        precpu_stats = raw.get("precpu_stats") or {}
+        cpu_usage = cpu_stats.get("cpu_usage") or {}
+        precpu_usage = precpu_stats.get("cpu_usage") or {}
+        cpu_delta = (cpu_usage.get("total_usage") or 0) - (precpu_usage.get("total_usage") or 0)
+        cur_sys = cpu_stats.get("system_cpu_usage") or 0
+        prev_sys = precpu_stats.get("system_cpu_usage") or 0
+        system_delta = cur_sys - prev_sys
+        if system_delta <= 0 or cpu_delta < 0:
+            return 0.0
+        num_cpus = (
+            cpu_stats.get("online_cpus")
+            or len(cpu_usage.get("percpu_usage") or [])
+            or 1
+        )
+        return (cpu_delta / system_delta) * num_cpus * 100.0
+
+    @staticmethod
+    def _compute_memory(raw: dict) -> dict:
+        mem = raw.get("memory_stats") or {}
+        usage = mem.get("usage") or 0
+        limit = mem.get("limit") or 0
+        pct = (usage / limit * 100.0) if limit else 0.0
+        return {"usage_bytes": usage, "limit_bytes": limit, "usage_percent": pct}
+
+    @staticmethod
+    def _compute_network(raw: dict) -> dict:
+        nets = raw.get("networks") or {}
+        rx = sum((iface.get("rx_bytes") or 0) for iface in nets.values())
+        tx = sum((iface.get("tx_bytes") or 0) for iface in nets.values())
+        return {"rx_bytes": rx, "tx_bytes": tx}
+
+    @staticmethod
+    def _compute_block_io(raw: dict) -> dict:
+        blkio = raw.get("blkio_stats") or {}
+        entries = blkio.get("io_service_bytes_recursive") or []
+        read_bytes = sum((e.get("value") or 0) for e in entries if e.get("op") == "Read")
+        write_bytes = sum((e.get("value") or 0) for e in entries if e.get("op") == "Write")
+        return {"read_bytes": read_bytes, "write_bytes": write_bytes}
+
     def build(
         self,
         image_tag: str,

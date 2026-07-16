@@ -1196,4 +1196,83 @@ def test_docker_diff_container_not_found(docker_backend, mock_client):
     assert result["status"] == "error"
 
 
+def test_docker_stats_returns_snapshot(docker_backend, mock_client):
+    """stats() returns a curated one-shot snapshot — no streaming."""
+    container = mock_client.containers.get.return_value
+    container.stats.return_value = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000, "percpu_usage": [100_000_000, 100_000_000]},
+            "system_cpu_usage": 10_000_000_000,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 9_900_000_000,
+        },
+        "memory_stats": {"usage": 50 * 1024 * 1024, "limit": 1024 * 1024 * 1024},
+        "networks": {
+            "eth0": {"rx_bytes": 1234, "tx_bytes": 5678},
+            "eth1": {"rx_bytes": 100, "tx_bytes": 200},
+        },
+        "blkio_stats": {
+            "io_service_bytes_recursive": [
+                {"op": "Read", "value": 4096},
+                {"op": "Write", "value": 8192},
+            ]
+        },
+    }
+
+    result = docker_backend.stats("dev")
+
+    container.stats.assert_called_once_with(stream=False)
+    # CPU: cpu_delta=100_000_000, system_delta=100_000_000, num_cpus=2
+    # cpu% = (100e6 / 100e6) * 2 * 100 = 200%
+    assert result["cpu_percent"] == pytest.approx(200.0)
+    # Memory
+    assert result["memory"]["usage_bytes"] == 50 * 1024 * 1024
+    assert result["memory"]["limit_bytes"] == 1024 * 1024 * 1024
+    expected_pct = 50 * 1024 * 1024 / (1024 * 1024 * 1024) * 100
+    assert result["memory"]["usage_percent"] == pytest.approx(expected_pct)
+    # Network — aggregated across interfaces
+    assert result["network"]["rx_bytes"] == 1234 + 100
+    assert result["network"]["tx_bytes"] == 5678 + 200
+    # Block IO — split by op
+    assert result["block_io"]["read_bytes"] == 4096
+    assert result["block_io"]["write_bytes"] == 8192
+
+
+def test_docker_stats_rejects_streaming(docker_backend, mock_client):
+    """stream=True is refused: MCP tool-call model doesn't fit long-lived streams."""
+    result = docker_backend.stats("dev", stream=True)
+    assert result["status"] == "error"
+    assert "streaming is not supported" in result["error"]
+    mock_client.containers.get.assert_not_called()
+
+
+def test_docker_stats_container_not_found(docker_backend, mock_client):
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.get.side_effect = DockerNotFound("nope")
+
+    result = docker_backend.stats("ghost")
+    assert result["status"] == "error"
+
+
+def test_docker_stats_handles_zero_cpu_delta(docker_backend, mock_client):
+    """First sample has zero deltas; cpu_percent is 0.0 (no divide-by-zero)."""
+    container = mock_client.containers.get.return_value
+    container.stats.return_value = {
+        "cpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0},
+        "precpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0},
+        "memory_stats": {},
+        "networks": {},
+        "blkio_stats": {},
+    }
+
+    result = docker_backend.stats("dev")
+    assert result["cpu_percent"] == 0.0
+    assert result["memory"] == {"usage_bytes": 0, "limit_bytes": 0, "usage_percent": 0.0}
+    assert result["network"] == {"rx_bytes": 0, "tx_bytes": 0}
+    assert result["block_io"] == {"read_bytes": 0, "write_bytes": 0}
+
+
 
