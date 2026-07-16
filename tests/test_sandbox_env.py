@@ -350,3 +350,111 @@ def test_docker_ps_returns_managed_containers_only(sandbox_env):
     sandbox_env._docker.list_managed_containers.assert_called_once()
     # Old fingerprinting path is dead.
     sandbox_env._docker.list_containers.assert_not_called()
+
+
+def test_docker_inspect_dispatches_to_backend(sandbox_env):
+    """docker_inspect resolves machine, validates backend, calls backend.inspect."""
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.inspect.return_value = {"id": "abc", "name": "dev"}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    result = sandbox_env.dispatch("docker_inspect", {"machine": "dev"})
+
+    sandbox_env._machines.resolve_machine.assert_called_once_with("dev")
+    backend.inspect.assert_called_once_with("dev", raw=False)
+    assert result == {"id": "abc", "name": "dev"}
+
+
+def test_docker_inspect_passes_raw_flag(sandbox_env):
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.inspect.return_value = {"State": {}}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    sandbox_env.dispatch("docker_inspect", {"machine": "dev", "raw": True})
+
+    backend.inspect.assert_called_once_with("dev", raw=True)
+
+
+def test_docker_inspect_rejects_non_docker_machine(sandbox_env):
+    """SSH backend returns 'docker_inspect only supported on Docker machines'."""
+    sandbox_env._machines.resolve_machine.return_value = "remote"
+    sandbox_env._machines.get_backend.return_value = sandbox_env._ssh  # SSHBackend instance
+
+    result = sandbox_env.dispatch("docker_inspect", {"machine": "remote"})
+
+    assert "error" in result
+    assert "Docker machines" in result["error"]
+
+
+def test_docker_logs_dispatches_to_backend(sandbox_env):
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.logs.return_value = {"logs": "x\n", "truncated": False}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    result = sandbox_env.dispatch(
+        "docker_logs",
+        {"machine": "dev", "tail": 50, "since": "10m", "timestamps": True},
+    )
+
+    backend.logs.assert_called_once_with("dev", tail=50, since="10m", until=None, timestamps=True)
+    assert result == {"logs": "x\n", "truncated": False}
+
+
+def test_docker_diff_dispatches_to_backend(sandbox_env):
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.diff.return_value = {"changes": {"A": [], "C": [], "D": []}, "summary": {}}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    result = sandbox_env.dispatch("docker_diff", {"machine": "dev"})
+
+    backend.diff.assert_called_once_with("dev")
+    assert "changes" in result
+
+
+def test_docker_stats_dispatches_to_backend(sandbox_env):
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.stats.return_value = {"cpu_percent": 1.0, "memory": {}, "network": {}, "block_io": {}}
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    result = sandbox_env.dispatch("docker_stats", {"machine": "dev"})
+
+    backend.stats.assert_called_once_with("dev", stream=False)
+    assert result["cpu_percent"] == 1.0
+
+
+def test_docker_restart_dispatches_to_backend(sandbox_env):
+    from sandbox_mcp.backends.base import TargetInfo
+    from sandbox_mcp.backends.docker_backend import DockerBackend
+
+    backend = MagicMock(spec=DockerBackend)
+    backend.restart.return_value = TargetInfo(name="dev", backend="docker", status="running")
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+
+    result = sandbox_env.dispatch("docker_restart", {"machine": "dev", "timeout": 30})
+
+    backend.restart.assert_called_once_with("dev", timeout=30)
+    assert result["status"] == "running"
+
+
+def test_docker_logs_requires_machine(sandbox_env):
+    """All five actions require a 'machine' param — verified for docker_logs
+    as the representative case (others use the same _require helper)."""
+    result = sandbox_env.dispatch("docker_logs", {})
+    assert "error" in result
+    assert "machine" in result["error"]

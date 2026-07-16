@@ -526,6 +526,78 @@ class SandboxEnv:
     def _op_docker_images(self, params):
         return {"images": self._docker.list_images()}
 
+    # ---- docker introspection ----
+
+    def _op_docker_inspect(self, params):
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        from sandbox_mcp.backends.docker_backend import DockerBackend
+
+        if not isinstance(backend, DockerBackend):
+            return {"error": "docker_inspect only supported on Docker machines"}
+        return backend.inspect(machine, raw=bool(params.get("raw", False)))
+
+    def _op_docker_logs(self, params):
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        from sandbox_mcp.backends.docker_backend import DockerBackend
+
+        if not isinstance(backend, DockerBackend):
+            return {"error": "docker_logs only supported on Docker machines"}
+        return backend.logs(
+            machine,
+            tail=int(params.get("tail", 200)),
+            since=params.get("since"),
+            until=params.get("until"),
+            timestamps=bool(params.get("timestamps", False)),
+        )
+
+    def _op_docker_diff(self, params):
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        from sandbox_mcp.backends.docker_backend import DockerBackend
+
+        if not isinstance(backend, DockerBackend):
+            return {"error": "docker_diff only supported on Docker machines"}
+        return backend.diff(machine)
+
+    def _op_docker_stats(self, params):
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        from sandbox_mcp.backends.docker_backend import DockerBackend
+
+        if not isinstance(backend, DockerBackend):
+            return {"error": "docker_stats only supported on Docker machines"}
+        return backend.stats(machine, stream=bool(params.get("stream", False)))
+
+    def _op_docker_restart(self, params):
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        from sandbox_mcp.backends.docker_backend import DockerBackend
+
+        if not isinstance(backend, DockerBackend):
+            return {"error": "docker_restart only supported on Docker machines"}
+        info = backend.restart(machine, timeout=int(params.get("timeout", 10)))
+        result = {"machine": info.name, "status": info.status}
+        if info.error:
+            result["error"] = info.error
+        return result
+
     # ---- ssh ----
 
     def _op_ssh_connect(self, params):
