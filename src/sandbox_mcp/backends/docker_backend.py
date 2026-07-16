@@ -749,6 +749,40 @@ class DockerBackend(Backend):
         truncated = line_count >= tail
         return {"logs": text, "truncated": truncated}
 
+    def diff(self, name: str) -> dict:
+        """Filesystem changes vs the container's image, grouped A/C/D.
+
+        docker SDK ``Container.diff()`` returns
+        ``[{"Path": str, "Kind": int}, ...]`` where Kind is
+        ``0=Modified``, ``1=Added``, ``2=Deleted``.
+        """
+        docker = _docker_module()
+        try:
+            container = self._ensure_client().containers.get(name)
+            raw = container.diff()
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        added, changed, deleted = [], [], []
+        for entry in raw or []:
+            path = entry.get("Path", "")
+            kind = entry.get("Kind")
+            if kind == 0:
+                changed.append(path)
+            elif kind == 1:
+                added.append(path)
+            elif kind == 2:
+                deleted.append(path)
+
+        added.sort()
+        changed.sort()
+        deleted.sort()
+
+        return {
+            "changes": {"A": added, "C": changed, "D": deleted},
+            "summary": {"added": len(added), "changed": len(changed), "deleted": len(deleted)},
+        }
+
     def build(
         self,
         image_tag: str,

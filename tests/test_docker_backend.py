@@ -1155,4 +1155,45 @@ def test_docker_logs_marks_not_truncated_when_under_tail(docker_backend, mock_cl
     assert result["truncated"] is False
 
 
+# ---- diff() ----
+
+
+def test_docker_diff_groups_by_kind(docker_backend, mock_client):
+    """diff() returns changes grouped by A (added) / C (changed) / D (deleted)."""
+    container = mock_client.containers.get.return_value
+    container.diff.return_value = [
+        {"Path": "/workspace/new.txt", "Kind": 1},  # Added
+        {"Path": "/workspace/modified.yaml", "Kind": 0},  # Changed
+        {"Path": "/workspace/old.log", "Kind": 2},  # Deleted
+        {"Path": "/workspace/another_new.txt", "Kind": 1},  # Added
+    ]
+
+    result = docker_backend.diff("dev")
+
+    assert result["changes"]["A"] == ["/workspace/another_new.txt", "/workspace/new.txt"]
+    assert result["changes"]["C"] == ["/workspace/modified.yaml"]
+    assert result["changes"]["D"] == ["/workspace/old.log"]
+    assert result["summary"] == {"added": 2, "changed": 1, "deleted": 1}
+
+
+def test_docker_diff_empty_returns_empty_groups(docker_backend, mock_client):
+    """A clean container (no fs changes) returns three empty groups."""
+    container = mock_client.containers.get.return_value
+    container.diff.return_value = []
+
+    result = docker_backend.diff("dev")
+
+    assert result["changes"] == {"A": [], "C": [], "D": []}
+    assert result["summary"] == {"added": 0, "changed": 0, "deleted": 0}
+
+
+def test_docker_diff_container_not_found(docker_backend, mock_client):
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.get.side_effect = DockerNotFound("nope")
+
+    result = docker_backend.diff("ghost")
+    assert result["status"] == "error"
+
+
 
