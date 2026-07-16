@@ -50,14 +50,22 @@ def test_help_returns_operations_and_pointers(sandbox_env):
 def test_docker_help_returns_docker_ops(sandbox_env):
     result = sandbox_env.dispatch("docker_help", {})
     actions = [op["action"] for op in result["operations"]]
+    # Lifecycle
     assert "docker_run" in actions
     assert "docker_build" in actions
     assert "docker_commit" in actions
     assert "docker_stop" in actions
     assert "docker_start" in actions
     assert "docker_remove" in actions
+    # Discovery
     assert "docker_ps" in actions
     assert "docker_images" in actions
+    # Introspection (new in this change)
+    assert "docker_inspect" in actions
+    assert "docker_logs" in actions
+    assert "docker_diff" in actions
+    assert "docker_stats" in actions
+    assert "docker_restart" in actions
 
 
 def test_ssh_help_returns_ssh_ops(sandbox_env):

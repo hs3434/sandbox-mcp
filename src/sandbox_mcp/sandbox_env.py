@@ -213,6 +213,78 @@ DOCKER_HELP_RESPONSE = {
             "required": {"machine": "string"},
             "returns": {"machine": "string", "status": "removed"},
         },
+        {
+            "action": "docker_inspect",
+            "description": (
+                "Curated container config: state, image, cmd, entrypoint, "
+                "mounts (source host path -> bind -> mode), labels, restart "
+                "policy.  Deliberately omits Env/working_dir/user/network "
+                "(use shell_exec env/pwd/whoami/hostname -i for those). "
+                "Pass raw=true to get the full attrs dict (incl. Env values, "
+                "NetworkSettings, HostConfig)."
+            ),
+            "required": {"machine": "string"},
+            "optional": {"raw": "bool - default false"},
+            "returns": {"id": "string", "name": "string", "image": "string",
+                        "state": "object", "cmd": "list|null",
+                        "entrypoint": "list|null", "mounts": "list",
+                        "labels": "object", "restart_policy": "object"},
+        },
+        {
+            "action": "docker_logs",
+            "description": (
+                "Read container logs (one-shot, merged stdout+stderr). "
+                "Works on stopped containers (primary use: read why a "
+                "container died).  tail is hard-capped at 10000."
+            ),
+            "required": {"machine": "string"},
+            "optional": {
+                "tail": "int - default 200, max 10000",
+                "since": "string - ISO 8601 or relative (e.g. 10m)",
+                "until": "string - same format as since",
+                "timestamps": "bool - prefix each line with RFC 3339 ts",
+            },
+            "returns": {"logs": "string", "truncated": "bool"},
+        },
+        {
+            "action": "docker_diff",
+            "description": (
+                "Filesystem changes vs the container's image, grouped by "
+                "kind: A (added), C (changed), D (deleted).  Useful before "
+                "docker_commit to confirm 'this is the layer I want to save'."
+            ),
+            "required": {"machine": "string"},
+            "returns": {
+                "changes": {"A": "list of paths", "C": "list", "D": "list"},
+                "summary": {"added": "int", "changed": "int", "deleted": "int"},
+            },
+        },
+        {
+            "action": "docker_stats",
+            "description": (
+                "One-shot resource snapshot: cpu_percent, memory usage/limit, "
+                "network rx/tx (aggregated across all interfaces), block IO "
+                "read/write.  Streaming is rejected (MCP tool-call model "
+                "is request/response; call again for the next snapshot)."
+            ),
+            "required": {"machine": "string"},
+            "optional": {"stream": "bool - default false; rejected if true"},
+            "returns": {"cpu_percent": "number", "memory": "object",
+                        "network": "object", "block_io": "object"},
+        },
+        {
+            "action": "docker_restart",
+            "description": (
+                "Atomic restart (stop then start) with the same post-check "
+                "as docker_start: a container whose CMD crashes is reported "
+                "as 'error' with a diagnostic tail, not 'running'.  For a "
+                "stopped container this is equivalent to docker_start."
+            ),
+            "required": {"machine": "string"},
+            "optional": {"timeout": "int - default 10 (seconds for stop phase)"},
+            "returns": {"machine": "string", "status": "running|error",
+                        "error": "string (on failure)"},
+        },
     ]
 }
 
