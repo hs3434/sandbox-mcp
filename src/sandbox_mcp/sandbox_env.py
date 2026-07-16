@@ -113,7 +113,18 @@ DOCKER_HELP_RESPONSE = {
                 "option because the bridge network makes it unnecessary. "
                 "Filesystem: a per-machine host directory under "
                 "work_home/<machine> is auto-bind-mounted to /workspace "
-                "and exposed as the container's working directory."
+                "and exposed as the container's working directory.  "
+                "Inter-container sharing is automatic: every container "
+                "also sees work_home/<share_subdir>/ (default `_share/`) "
+                "bind-mounted at /workspace/.share/ — the container's own "
+                "subdirectory at /workspace/.share/<machine>/ is read-write, "
+                "every other peer machine's subdirectory is read-only.  "
+                "Convention: write shared artefacts to "
+                "/workspace/.share/<machine>/, read peers' output from "
+                '/workspace/.share/<peer>/.  Set `[storage] share_subdir = ""` '
+                "to disable.  Arbitrary host paths remain unmountable "
+                "(sandbox boundary) — no `/etc`, `/root`, or docker socket "
+                "ever leaks into a container via sandbox-mcp."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "returns": {"name": "string", "status": "running", "backend": "docker"},

@@ -64,6 +64,13 @@ class ServerConfig:
 @dataclass(frozen=True)
 class StorageConfig:
     work_home: Path = field(default_factory=lambda: Path.home() / ".sandbox-mcp" / "workspaces")
+    # Sub-directory under work_home used as the inter-container shared
+    # workspace.  Every container bind-mounts ``work_home/<share_subdir>/<self>/``
+    # rw into ``/workspace/.share/<self>/``, plus every other peer
+    # subdirectory read-only — agents collaborate by reading
+    # ``/workspace/.share/<peer>/...`` and writing to
+    # ``/workspace/.share/<self>/...``.  Empty string disables the feature.
+    share_subdir: str = "_share"
 
     def __post_init__(self) -> None:
         # Resolve ~ eagerly so callers always get an absolute path.
@@ -187,6 +194,7 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "server_auth_tokens_file": ("server", "auth_tokens_file", str),
         "server_auto_generate_if_empty": ("server", "auto_generate_if_empty", _as_bool),
         "storage_work_home": ("storage", "work_home", str),
+        "storage_share_subdir": ("storage", "share_subdir", str),
         "audit_log_path": ("audit", "log_path", str),
         "docker_default_image": ("docker", "default_image", str),
         "docker_restart_policy_name": ("docker", "restart_policy_name", str),

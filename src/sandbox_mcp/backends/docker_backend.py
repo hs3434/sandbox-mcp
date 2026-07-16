@@ -66,6 +66,42 @@ def _container_to_host(container_path: str, machine: str) -> Path:
     return target
 
 
+def _build_share_bindings(name: str) -> dict:
+    """Build bind mounts for the inter-container share dir.
+
+    Two mounts, fixed regardless of peer count:
+
+    1. The whole share root is bind-mounted **read-only** at
+       ``/workspace/.share/``.  The kernel evaluates a mount's contents
+       at access time, so peer subdirectories created *after* a
+       container starts are visible to it on the next ``ls`` — no
+       remount needed.
+    2. The container's own subdirectory is overlaid **read-write** at
+       ``/workspace/.share/<name>/``, so the agent can drop artefacts
+       for peers to read while still being unable to tamper with peer
+       subdirectories (the parent mount is ro; only the overlay path
+       is writable).
+
+    Returns a dict of ``{host_path: {"bind": container_path, "mode": ...}}``
+    ready for the docker SDK's ``volumes=`` kwarg.  Empty when
+    ``[storage] share_subdir`` is the empty string (feature disabled).
+    """
+    share_subdir = _load_config().storage.share_subdir
+    if not share_subdir:
+        return {}
+    share_root = get_work_home() / share_subdir
+    self_dir = share_root / name
+    share_root.mkdir(parents=True, exist_ok=True)
+    self_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        str(share_root.resolve()): {"bind": "/workspace/.share", "mode": "ro"},
+        str(self_dir.resolve()): {
+            "bind": f"/workspace/.share/{name}",
+            "mode": "rw",
+        },
+    }
+
+
 class DockerExecProcess:
     """Wrapper around a Docker SDK exec socket that mimics ``subprocess.Popen``.
 
@@ -253,12 +289,16 @@ class DockerBackend(Backend):
         docker_cfg = _load_config().docker
         image = kwargs.get("image", docker_cfg.default_image)
         # Note: agent-supplied ``volumes`` mounts are intentionally NOT
-        # accepted.  The only bind mount is the auto-attached work_home
-        # below — agents that need additional paths must ``docker exec``
-        # into the container or extend the sandbox.  This keeps the
-        # sandbox's host-filesystem boundary intact: the agent cannot
-        # smuggle arbitrary host directories (e.g. ``/etc``, ``/root``)
-        # into a sandboxed container.
+        # accepted.  The only bind mounts are:
+        #   (1) ``work_home/<name>`` → ``/workspace`` (the per-machine
+        #       workspace, rw), and
+        #   (2) the auto-discovered shared directory
+        #       ``work_home/<share_subdir>/<name>`` → ``/workspace/.share/<name>``
+        #       (rw) plus every peer subdirectory read-only — see
+        #       ``_build_share_bindings``.
+        # Arbitrary host paths (``/etc``, ``/root``, the docker socket)
+        # remain unreachable from inside the container: an agent cannot
+        # smuggle them via any sandbox-mcp tool.
         #
         # Likewise, agent-supplied ``ports``, ``env``, and ``workdir`` are
         # not honoured: inter-container access uses the auto-created
@@ -273,6 +313,21 @@ class DockerBackend(Backend):
         # set on every container this backend creates (see below).
         container_name = name
 
+        # Build the inter-container share mount spec.  Failures here
+        # (e.g. permission errors creating the share dir) are returned
+        # to the agent BEFORE touching the daemon, so a bad config
+        # never leaves a half-created container behind.
+        try:
+            share_bindings = _build_share_bindings(name)
+        except OSError as e:
+            return TargetInfo(
+                name=name,
+                backend="docker",
+                status="error",
+                purpose=purpose,
+                error=f"failed to set up share dir: {e}",
+            )
+
         # Ensure shared network for DNS-resolvable container names.
         auto_network = docker_cfg.auto_network
         if auto_network:
@@ -283,6 +338,7 @@ class DockerBackend(Backend):
         # host path — it just works in /workspace.
         machine_dir = get_work_dir(name)
         volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
+        volume_bindings.update(share_bindings)
 
         # Reconciliation labels: identify containers this backend owns so
         # :meth:`list_managed_containers` can re-discover them after the
@@ -577,6 +633,16 @@ class DockerBackend(Backend):
         ``dockerfile`` and ``context_dir`` must both be under
         ``/workspace/`` — host paths are not accepted (sandbox boundary).
 
+        Existence of the Dockerfile / context is delegated to the Docker
+        daemon — the mcp process does NOT pre-check via ``is_file()``
+        because that would inspect the mcp container's filesystem, not
+        the daemon's.  When sandbox-mcp runs inside a container with a
+        docker socket mount, ``work_home`` is a HOST-side path invisible
+        to the mcp process; a pre-check there would falsely report
+        "not found" for files that the daemon can see fine.  The daemon
+        raises ``BuildError`` (missing Dockerfile) or ``NotFound``
+        (missing context dir) which we surface verbatim.
+
         ``dockerfile_content`` is intentionally NOT accepted.  Inline
         mode used to stage the Dockerfile under ``work_home/_builds/``
         and feed it directly to ``docker build`` — bypassing the
@@ -614,18 +680,6 @@ class DockerBackend(Backend):
         except ValueError as e:
             return {
                 "error": str(e),
-                "image_tag": image_tag,
-                "status": "error",
-            }
-        if not df_host.is_file():
-            return {
-                "error": f"Dockerfile not found: {df_host}",
-                "image_tag": image_tag,
-                "status": "error",
-            }
-        if not ctx_host.is_dir():
-            return {
-                "error": f"Build context not found: {ctx_host}",
                 "image_tag": image_tag,
                 "status": "error",
             }

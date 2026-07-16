@@ -20,7 +20,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import docker
 from sandbox_mcp.backends.docker_backend import DockerBackend
+
+
+@pytest.fixture(autouse=True)
+def _redirect_work_home(tmp_path, monkeypatch):
+    """Auto-redirect ``[storage] work_home`` to a per-test tmp dir.
+
+    docker_backend.create() now auto-creates ``work_home/_share/<name>/``
+    for the inter-container share, so every create() call writes to the
+    filesystem.  Without this fixture, tests would pollute the real
+    ``~/.sandbox-mcp/workspaces/_share/`` and leak between runs.  Tests
+    that need a custom work_home path can still override via their own
+    ``monkeypatch.setenv`` (later calls win).
+    """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
 
 
 @pytest.fixture
@@ -48,7 +63,15 @@ def docker_backend(mock_client):
         yield DockerBackend()
 
 
-def test_docker_create(docker_backend, mock_client):
+def test_docker_create(docker_backend, mock_client, tmp_path, monkeypatch):
+    """End-to-end create() with no special params.
+
+    Three auto mounts: ``work_home/dev`` → ``/workspace`` (workspace),
+    ``work_home/_share`` → ``/workspace/.share`` (share root, ro), and
+    ``work_home/_share/dev`` → ``/workspace/.share/dev`` (self overlay,
+    rw).  No agent-supplied host paths leak through (security boundary).
+    """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     info = docker_backend.create(
         name="dev",
         purpose="test",
@@ -56,36 +79,39 @@ def test_docker_create(docker_backend, mock_client):
     )
     assert info.name == "dev"
     assert info.backend == "docker"
-    assert info.status == "running"
-    # Verify the SDK was called correctly.
+    assert info.status == "running", f"unexpected error: {info.error!r}"
     run_args = mock_client.containers.run.call_args
     assert run_args.args[0] == "python:3.12"
     run_kwargs = run_args.kwargs
-    # Container is named with the bare machine name — the label, not the
-    # name prefix, is the namespace marker.
     assert run_kwargs["name"] == "dev"
-    # Volume mounts: only the auto-bound work_home mount is allowed;
-    # no agent-supplied host paths leak through (security boundary).
     mounts = run_kwargs.get("volumes") or {}
-    assert len(mounts) == 1, f"expected only the work_home mount, got: {mounts}"
-    # Reconciliation labels are set on every container this backend creates —
-    # this is how SandboxServer re-discovers them after restart.
+    assert len(mounts) == 3, f"expected workspace + 2 share mounts, got: {mounts}"
+    bind_targets = {m["bind"] for m in mounts.values()}
+    assert bind_targets == {
+        "/workspace",
+        "/workspace/.share",
+        "/workspace/.share/dev",
+    }, bind_targets
     labels = run_kwargs.get("labels") or {}
     assert labels.get("sandbox-mcp.managed") == "true"
     assert labels.get("sandbox-mcp.machine") == "dev"
 
 
-def test_docker_create_writes_purpose_label(docker_backend, mock_client):
+def test_docker_create_writes_purpose_label(docker_backend, mock_client, tmp_path, monkeypatch):
     """purpose is persisted as a docker label so it survives restarts
     (read back by docker_ps reconciliation)."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     docker_backend.create(name="dev", purpose="Python dev box", image="python:3.12")
     labels = mock_client.containers.run.call_args.kwargs.get("labels") or {}
     assert labels.get("sandbox-mcp.purpose") == "Python dev box"
 
 
-def test_docker_create_omits_purpose_label_when_empty(docker_backend, mock_client):
+def test_docker_create_omits_purpose_label_when_empty(
+    docker_backend, mock_client, tmp_path, monkeypatch
+):
     """Empty purpose -> no label key (absence == 'no purpose', cleaner
     than an empty-string value)."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     docker_backend.create(name="dev", purpose="", image="python:3.12")
     labels = mock_client.containers.run.call_args.kwargs.get("labels") or {}
     assert "sandbox-mcp.purpose" not in labels
@@ -94,11 +120,12 @@ def test_docker_create_omits_purpose_label_when_empty(docker_backend, mock_clien
     assert labels.get("sandbox-mcp.machine") == "dev"
 
 
-def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
+def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client, tmp_path, monkeypatch):
     """Agent cannot smuggle arbitrary host paths into the container via
-    a ``volumes`` kwarg.  The only bind mount is the auto-attached
-    work_home; agent-supplied mounts are silently dropped.
+    a Docker SDK ``volumes`` kwarg.  The auto-mounted bindings are
+    workspace + share; attacker-supplied mounts are silently dropped.
     """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     docker_backend.create(
         name="dev",
         purpose="test",
@@ -106,11 +133,79 @@ def test_docker_create_ignores_volumes_kwarg(docker_backend, mock_client):
         volumes=["/etc:/host-etc", "/root:/host-root"],  # attacker attempt
     )
     mounts = mock_client.containers.run.call_args.kwargs.get("volumes") or {}
-    # Only one mount allowed: the work_home for "dev".
-    assert len(mounts) == 1, f"agent-supplied mounts leaked: {mounts}"
-    # The single mount must end with the work_home dir for "dev", not /etc or /root.
-    host_path = next(iter(mounts))
-    assert str(host_path).endswith("/dev"), f"unexpected mount host path: {host_path}"
+    # All mounts must end under work_home — never /etc, /root, etc.
+    for host_path in mounts:
+        assert "etc" not in str(host_path).split("/"), f"host /etc leaked: {host_path}"
+        assert "root" not in str(host_path).split("/"), f"host /root leaked: {host_path}"
+
+
+# ---- inter-container share dir -------------------------------------------
+
+
+def test_docker_create_share_uses_two_mounts_not_per_peer(docker_backend, mock_client, tmp_path):
+    """The share is set up as exactly two bind mounts (parent ro + self
+    rw overlay), regardless of how many peer subdirs exist — peer count
+    has zero impact on mount count or startup time.
+    """
+    (tmp_path / "_share" / "alice").mkdir(parents=True)
+    (tmp_path / "_share" / "bob").mkdir(parents=True)
+    (tmp_path / "_share" / "carol").mkdir(parents=True)
+
+    docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    mounts = mock_client.containers.run.call_args.kwargs["volumes"]
+    share_mounts = [m for m in mounts.values() if m["bind"].startswith("/workspace/.share")]
+    assert len(share_mounts) == 2, (
+        f"expected parent ro + self overlay, got {len(share_mounts)} mounts: {share_mounts}"
+    )
+    parent = next(m for m in share_mounts if m["bind"] == "/workspace/.share")
+    assert parent["mode"] == "ro", parent
+    overlay = next(m for m in share_mounts if m["bind"] == "/workspace/.share/dev")
+    assert overlay["mode"] == "rw", overlay
+
+
+def test_docker_create_share_creates_root_and_self_on_first_use(
+    docker_backend, mock_client, tmp_path
+):
+    """First create() also creates work_home/_share/ and work_home/_share/<self>/.
+
+    Both are needed: the parent mount requires the root, the overlay
+    requires the self subdir (otherwise the mount source is missing).
+    """
+    assert not (tmp_path / "_share").exists()
+    docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    assert (tmp_path / "_share").is_dir()
+    assert (tmp_path / "_share" / "dev").is_dir()
+
+
+def test_docker_create_share_disabled_when_subdir_empty(docker_backend, mock_client, monkeypatch):
+    """Setting `[storage] share_subdir = ""` disables the share mount
+    entirely — only the per-machine workspace bind remains.
+    """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_SHARE_SUBDIR", "")
+    docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    mounts = mock_client.containers.run.call_args.kwargs["volumes"]
+    bind_targets = {m["bind"] for m in mounts.values()}
+    assert "/workspace" in bind_targets
+    assert not any(b.startswith("/workspace/.share/") for b in bind_targets), bind_targets
+
+
+def test_docker_create_share_sees_existing_peers_through_parent(
+    docker_backend, mock_client, tmp_path
+):
+    """A peer subdir created before this container starts is reachable
+    through the parent ro mount — no per-peer bind entry needed.  The
+    mount's contents are evaluated by the kernel on access, so any
+    peer subdir that exists on the host shows up at the corresponding
+    path inside the container.
+    """
+    (tmp_path / "_share" / "alice").mkdir(parents=True)
+    (tmp_path / "_share" / "alice" / "out.txt").write_text("hi")
+    docker_backend.create(name="dev", purpose="t", image="alpine:3")
+    mounts = mock_client.containers.run.call_args.kwargs["volumes"]
+    bind_targets = {m["bind"] for m in mounts.values()}
+    # alice/ is NOT an explicit bind — it surfaces through /workspace/.share/.
+    assert "/workspace/.share/alice" not in bind_targets, bind_targets
+    assert "/workspace/.share" in bind_targets
 
 
 def test_docker_create_uses_bare_machine_name(monkeypatch, tmp_path, mock_client):
@@ -372,12 +467,44 @@ def test_docker_build_nested_workspace_path(docker_backend, tmp_path, monkeypatc
 
 
 def test_docker_build_missing_dockerfile(docker_backend, tmp_path, monkeypatch):
-    """File mode with no Dockerfile on disk → error (not SDK exception)."""
+    """File mode with no Dockerfile on disk → daemon-reported error surfaces.
+
+    The mcp process no longer pre-checks ``df_host.is_file()`` because
+    that inspects the wrong filesystem when sandbox-mcp runs inside a
+    container (the path is valid on the docker daemon's host but
+    invisible to the mcp process).  The daemon is the source of truth;
+    its ``BuildError`` / ``NotFound`` is propagated to the agent.
+    """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     (tmp_path / "dev").mkdir()
-    result = docker_backend.build("img:latest", machine="dev")
+    with patch.object(
+        docker_backend._ensure_client().images,
+        "build",
+        side_effect=docker.errors.BuildError("Cannot locate specified Dockerfile: Dockerfile", []),
+    ):
+        result = docker_backend.build("img:latest", machine="dev")
     assert result["status"] == "error"
-    assert "Dockerfile not found" in result["error"]
+    assert "Dockerfile" in result["error"]
+
+
+def test_docker_build_missing_context(docker_backend, tmp_path, monkeypatch):
+    """Missing context dir → daemon-reported NotFound surfaces.
+
+    Mirrors ``test_docker_build_missing_dockerfile`` for the context
+    directory.  The daemon raises ``NotFound`` (subclass of ``APIError``)
+    when the build context path is absent on the host; the agent sees
+    the daemon's message verbatim.
+    """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
+    (tmp_path / "dev").mkdir()
+    with patch.object(
+        docker_backend._ensure_client().images,
+        "build",
+        side_effect=docker.errors.NotFound("context not found"),
+    ):
+        result = docker_backend.build("img:latest", machine="dev")
+    assert result["status"] == "error"
+    assert "context" in result["error"].lower() or "not found" in result["error"].lower()
 
 
 def test_docker_open_shell(docker_backend, mock_client):

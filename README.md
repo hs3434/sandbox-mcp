@@ -317,12 +317,46 @@ outside its assigned `work_home/<machine>/`.
 The agent cannot smuggle arbitrary host paths into a sandboxed
 container:
 
-- `volumes=[]` is **not accepted**. The only bind mount is the
-  auto-attached `work_home/<machine>` → `/workspace`. Attempts to pass
+- The Docker SDK's raw `volumes=[]` is **not accepted**. Attempts to pass
   `volumes=["/:/host", "/etc:/host-etc"]` are silently dropped.
+- The auto-mounted bind set is **fixed**: the per-machine workspace
+  (`work_home/<name>` → `/workspace`, rw) and the inter-container share
+  dir (see below).  There is no per-run mount parameter — agents cannot
+  reach arbitrary host paths via sandbox-mcp.
 - The agent can run any image and `docker exec` any command *inside*
-  the container, but cannot mount host paths, cannot read host
-  `/etc`, `/root`, etc. from inside.
+  the container, but cannot mount arbitrary host paths, cannot read
+  host `/etc`, `/root`, etc. from inside.
+
+#### Inter-container share directory
+
+Every `docker_run` automatically bind-mounts `work_home/<share_subdir>/`
+(default `_share/`) into the container at `/workspace/.share/`.  The
+mount spec is fixed at two bind mounts, regardless of how many peer
+containers exist:
+
+1. The whole share root is mounted **read-only** at `/workspace/.share/`.
+2. The container's own subdirectory `work_home/_share/<machine>/` is
+   overlaid **read-write** at `/workspace/.share/<machine>/` — the
+   agent can drop its own output, but the ro parent mount still blocks
+   writes to any peer subdirectory (kernel-enforced mount flag).
+
+Convention:
+
+```text
+# inside the "dev" container:
+echo "build output" > /workspace/.share/dev/result.txt      # self rw
+cat /workspace/.share/alice/notes.md                        # peer ro (via parent ro)
+ls /workspace/.share/                                       # discover peers
+```
+
+**New peers appear automatically.** Because the parent mount covers
+the whole `_share/` tree, the kernel evaluates its contents at
+access time — a peer subdir created on the host *after* the container
+starts is visible to it on the next `ls`.  No container recreation
+needed.
+
+Disable by setting `[storage] share_subdir = ""` (env:
+`SANDBOX_MCP_STORAGE_SHARE_SUBDIR`).
 
 This is a deliberate **first line of defense**: the sandbox's
 file-write boundary extends into `docker_run`. **Caveats** still apply:
