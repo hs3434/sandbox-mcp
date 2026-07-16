@@ -116,15 +116,23 @@ DOCKER_HELP_RESPONSE = {
                 "and exposed as the container's working directory.  "
                 "Inter-container sharing is automatic: every container "
                 "also sees work_home/<share_subdir>/ (default `_share/`) "
-                "bind-mounted at /workspace/.share/ — the container's own "
-                "subdirectory at /workspace/.share/<machine>/ is read-write, "
+                "bind-mounted at /workspace/share/ — the container's own "
+                "subdirectory at /workspace/share/<machine>/ is read-write, "
                 "every other peer machine's subdirectory is read-only.  "
                 "Convention: write shared artefacts to "
-                "/workspace/.share/<machine>/, read peers' output from "
-                '/workspace/.share/<peer>/.  Set `[storage] share_subdir = ""` '
+                "/workspace/share/<machine>/, read peers' output from "
+                '/workspace/share/<peer>/.  Set `[storage] share_subdir = ""` '
                 "to disable.  Arbitrary host paths remain unmountable "
                 "(sandbox boundary) — no `/etc`, `/root`, or docker socket "
-                "ever leaks into a container via sandbox-mcp."
+                "ever leaks into a container via sandbox-mcp.  "
+                "Admin machine (special): when ``name`` matches "
+                "``[docker] admin_machine`` (default `admin`), the container "
+                "gets an extra bind of the WHOLE work_home tree at ``/host`` "
+                "(rw) in addition to its own ``/workspace`` — use this for "
+                "cross-machine cleanup/inspection.  Operations through "
+                "``/host`` are irreversible; agents should default to "
+                "``/workspace`` for own work and only target ``/host/<peer>/`` "
+                "explicitly."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "returns": {"name": "string", "status": "running", "backend": "docker"},

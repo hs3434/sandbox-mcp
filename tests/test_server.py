@@ -202,6 +202,7 @@ def test_provision_default_machine_docker_surfaces_reattach_note(monkeypatch):
     from sandbox_mcp.backends.base import TargetInfo
 
     monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "default")
     with (
         patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
         patch("sandbox_mcp.server.SSHBackend"),
@@ -263,6 +264,7 @@ def test_provision_default_machine_error_info_raises(monkeypatch):
     from sandbox_mcp.backends.base import TargetInfo
 
     monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_NAME", "default")
     with (
         patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
         patch("sandbox_mcp.server.SSHBackend"),

@@ -67,8 +67,8 @@ def test_docker_create(docker_backend, mock_client, tmp_path, monkeypatch):
     """End-to-end create() with no special params.
 
     Three auto mounts: ``work_home/dev`` → ``/workspace`` (workspace),
-    ``work_home/_share`` → ``/workspace/.share`` (share root, ro), and
-    ``work_home/_share/dev`` → ``/workspace/.share/dev`` (self overlay,
+    ``work_home/_share`` → ``/workspace/share`` (share root, ro), and
+    ``work_home/_share/dev`` → ``/workspace/share/dev`` (self overlay,
     rw).  No agent-supplied host paths leak through (security boundary).
     """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
@@ -89,8 +89,8 @@ def test_docker_create(docker_backend, mock_client, tmp_path, monkeypatch):
     bind_targets = {m["bind"] for m in mounts.values()}
     assert bind_targets == {
         "/workspace",
-        "/workspace/.share",
-        "/workspace/.share/dev",
+        "/workspace/share",
+        "/workspace/share/dev",
     }, bind_targets
     labels = run_kwargs.get("labels") or {}
     assert labels.get("sandbox-mcp.managed") == "true"
@@ -153,13 +153,13 @@ def test_docker_create_share_uses_two_mounts_not_per_peer(docker_backend, mock_c
 
     docker_backend.create(name="dev", purpose="t", image="alpine:3")
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
-    share_mounts = [m for m in mounts.values() if m["bind"].startswith("/workspace/.share")]
+    share_mounts = [m for m in mounts.values() if m["bind"].startswith("/workspace/share")]
     assert len(share_mounts) == 2, (
         f"expected parent ro + self overlay, got {len(share_mounts)} mounts: {share_mounts}"
     )
-    parent = next(m for m in share_mounts if m["bind"] == "/workspace/.share")
+    parent = next(m for m in share_mounts if m["bind"] == "/workspace/share")
     assert parent["mode"] == "ro", parent
-    overlay = next(m for m in share_mounts if m["bind"] == "/workspace/.share/dev")
+    overlay = next(m for m in share_mounts if m["bind"] == "/workspace/share/dev")
     assert overlay["mode"] == "rw", overlay
 
 
@@ -186,7 +186,7 @@ def test_docker_create_share_disabled_when_subdir_empty(docker_backend, mock_cli
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
     bind_targets = {m["bind"] for m in mounts.values()}
     assert "/workspace" in bind_targets
-    assert not any(b.startswith("/workspace/.share/") for b in bind_targets), bind_targets
+    assert not any(b.startswith("/workspace/share/") for b in bind_targets), bind_targets
 
 
 def test_docker_create_share_sees_existing_peers_through_parent(
@@ -203,9 +203,88 @@ def test_docker_create_share_sees_existing_peers_through_parent(
     docker_backend.create(name="dev", purpose="t", image="alpine:3")
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
     bind_targets = {m["bind"] for m in mounts.values()}
-    # alice/ is NOT an explicit bind — it surfaces through /workspace/.share/.
-    assert "/workspace/.share/alice" not in bind_targets, bind_targets
-    assert "/workspace/.share" in bind_targets
+    # alice/ is NOT an explicit bind — it surfaces through /workspace/share/.
+    assert "/workspace/share/alice" not in bind_targets, bind_targets
+    assert "/workspace/share" in bind_targets
+
+
+# ---- admin machine --------------------------------------------------------
+
+
+def test_docker_create_admin_uses_own_and_host_mounts(docker_backend, mock_client, tmp_path):
+    """Admin container gets TWO workspace-style mounts: own scratch at
+    ``/workspace`` (work_home/admin/) AND global view at ``/host``
+    (work_home itself).  Share bindings are skipped because the global
+    mount already covers ``work_home/_share/``.
+    """
+    info = docker_backend.create(name="admin", purpose="admin", image="alpine:3")
+    assert info.status == "running", f"unexpected error: {info.error!r}"
+    mounts = mock_client.containers.run.call_args.kwargs["volumes"]
+    bind_targets = {m["bind"] for m in mounts.values()}
+    assert bind_targets == {"/workspace", "/host"}, bind_targets
+    # Both mounts must be rw.
+    assert all(m["mode"] == "rw" for m in mounts.values()), mounts
+    # No /workspace/share mount for admin (covered by /host).
+    assert not any(b.startswith("/workspace/share") for b in bind_targets), bind_targets
+
+
+def test_docker_create_admin_skips_share_dir_creation(docker_backend, mock_client, tmp_path):
+    """Admin does NOT create ``work_home/_share/admin/`` — peers must
+    not see admin as a share peer (admin is an ops channel, not a
+    collaborator).
+    """
+    docker_backend.create(name="admin", purpose="admin", image="alpine:3")
+    assert not (tmp_path / "_share" / "admin").exists(), (
+        "_share/admin/ should not be auto-created for admin"
+    )
+
+
+def test_docker_create_admin_uses_admin_image(docker_backend, mock_client, tmp_path, monkeypatch):
+    """``[docker] admin_image`` overrides ``default_image`` when set."""
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "alpine:3.20")
+    docker_backend.create(name="admin", purpose="admin")
+    run_args = mock_client.containers.run.call_args
+    assert run_args.args[0] == "alpine:3.20"
+
+
+def test_docker_create_admin_falls_back_to_default_image(
+    docker_backend, mock_client, tmp_path, monkeypatch
+):
+    """Empty ``admin_image`` falls back to ``default_image``."""
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "")
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_DEFAULT_IMAGE", "debian:bookworm")
+    docker_backend.create(name="admin", purpose="admin")
+    assert mock_client.containers.run.call_args.args[0] == "debian:bookworm"
+
+
+def test_docker_create_admin_disabled_when_admin_machine_empty(
+    docker_backend, mock_client, tmp_path, monkeypatch
+):
+    """When ``admin_machine = ""``, the name ``admin`` is a normal peer —
+    share mount is added, no /host, default_image is used.
+    """
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_MACHINE", "")
+    docker_backend.create(name="admin", purpose="ops", image="alpine:3")
+    mounts = mock_client.containers.run.call_args.kwargs["volumes"]
+    bind_targets = {m["bind"] for m in mounts.values()}
+    # Peer-style mount layout: workspace + share parent + share overlay.
+    assert bind_targets == {
+        "/workspace",
+        "/workspace/share",
+        "/workspace/share/admin",
+    }, bind_targets
+    assert "/host" not in bind_targets, bind_targets
+
+
+def test_docker_create_admin_explicit_image_kwarg_wins(
+    docker_backend, mock_client, tmp_path, monkeypatch
+):
+    """Agent-supplied ``image`` kwarg beats both ``admin_image`` and
+    ``default_image`` (matches peer behaviour — explicit > config).
+    """
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "alpine:3.20")
+    docker_backend.create(name="admin", purpose="admin", image="busybox:latest")
+    assert mock_client.containers.run.call_args.args[0] == "busybox:latest"
 
 
 def test_docker_create_uses_bare_machine_name(monkeypatch, tmp_path, mock_client):

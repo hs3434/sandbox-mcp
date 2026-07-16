@@ -212,7 +212,7 @@ def test_default_machine_defaults_disabled():
     dm = DefaultMachineConfig()
     assert dm.enabled is False
     assert dm.backend == "docker"
-    assert dm.name == "default"
+    assert dm.name == "admin"
     assert dm.purpose == ""
     # No backend-specific fields here anymore.
     assert not hasattr(dm, "image")

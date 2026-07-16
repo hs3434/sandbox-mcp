@@ -72,12 +72,12 @@ def _build_share_bindings(name: str) -> dict:
     Two mounts, fixed regardless of peer count:
 
     1. The whole share root is bind-mounted **read-only** at
-       ``/workspace/.share/``.  The kernel evaluates a mount's contents
+       ``/workspace/share/``.  The kernel evaluates a mount's contents
        at access time, so peer subdirectories created *after* a
        container starts are visible to it on the next ``ls`` — no
        remount needed.
     2. The container's own subdirectory is overlaid **read-write** at
-       ``/workspace/.share/<name>/``, so the agent can drop artefacts
+       ``/workspace/share/<name>/``, so the agent can drop artefacts
        for peers to read while still being unable to tamper with peer
        subdirectories (the parent mount is ro; only the overlay path
        is writable).
@@ -85,6 +85,10 @@ def _build_share_bindings(name: str) -> dict:
     Returns a dict of ``{host_path: {"bind": container_path, "mode": ...}}``
     ready for the docker SDK's ``volumes=`` kwarg.  Empty when
     ``[storage] share_subdir`` is the empty string (feature disabled).
+
+    Skipped entirely for the admin machine — its ``/host`` mount (the
+    whole ``work_home``) already exposes ``work_home/<share_subdir>/``
+    at ``/host/<share_subdir>/``.
     """
     share_subdir = _load_config().storage.share_subdir
     if not share_subdir:
@@ -94,9 +98,9 @@ def _build_share_bindings(name: str) -> dict:
     share_root.mkdir(parents=True, exist_ok=True)
     self_dir.mkdir(parents=True, exist_ok=True)
     return {
-        str(share_root.resolve()): {"bind": "/workspace/.share", "mode": "ro"},
+        str(share_root.resolve()): {"bind": "/workspace/share", "mode": "ro"},
         str(self_dir.resolve()): {
-            "bind": f"/workspace/.share/{name}",
+            "bind": f"/workspace/share/{name}",
             "mode": "rw",
         },
     }
@@ -287,15 +291,30 @@ class DockerBackend(Backend):
 
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
-        image = kwargs.get("image", docker_cfg.default_image)
+        is_admin = bool(docker_cfg.admin_machine) and name == docker_cfg.admin_machine
+        # Admin image: explicit kwarg > admin_image > default_image.
+        if is_admin:
+            image = kwargs.get("image") or docker_cfg.admin_image or docker_cfg.default_image
+        else:
+            image = kwargs.get("image", docker_cfg.default_image)
         # Note: agent-supplied ``volumes`` mounts are intentionally NOT
         # accepted.  The only bind mounts are:
         #   (1) ``work_home/<name>`` → ``/workspace`` (the per-machine
         #       workspace, rw), and
         #   (2) the auto-discovered shared directory
-        #       ``work_home/<share_subdir>/<name>`` → ``/workspace/.share/<name>``
+        #       ``work_home/<share_subdir>/<name>`` → ``/workspace/share/<name>``
         #       (rw) plus every peer subdirectory read-only — see
         #       ``_build_share_bindings``.
+        #
+        # EXCEPTION — the admin machine (name == ``docker.admin_machine``,
+        # non-empty): it gets an ADDITIONAL mount
+        #   ``work_home`` → ``/host`` (rw, global view).
+        # The whole work_home tree is exposed so the agent can read every
+        # peer's workspace and modify them when doing cross-machine
+        # cleanup.  Admin is its own god-mode container — operations there
+        # are irreversible.  Share bindings are skipped because the global
+        # mount already covers ``work_home/<share_subdir>/``.
+        #
         # Arbitrary host paths (``/etc``, ``/root``, the docker socket)
         # remain unreachable from inside the container: an agent cannot
         # smuggle them via any sandbox-mcp tool.
@@ -313,21 +332,6 @@ class DockerBackend(Backend):
         # set on every container this backend creates (see below).
         container_name = name
 
-        # Build the inter-container share mount spec.  Failures here
-        # (e.g. permission errors creating the share dir) are returned
-        # to the agent BEFORE touching the daemon, so a bad config
-        # never leaves a half-created container behind.
-        try:
-            share_bindings = _build_share_bindings(name)
-        except OSError as e:
-            return TargetInfo(
-                name=name,
-                backend="docker",
-                status="error",
-                purpose=purpose,
-                error=f"failed to set up share dir: {e}",
-            )
-
         # Ensure shared network for DNS-resolvable container names.
         auto_network = docker_cfg.auto_network
         if auto_network:
@@ -338,7 +342,29 @@ class DockerBackend(Backend):
         # host path — it just works in /workspace.
         machine_dir = get_work_dir(name)
         volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
-        volume_bindings.update(share_bindings)
+
+        if is_admin:
+            # Global view: admin sees the entire work_home tree at /host.
+            # Overlap with /workspace (both reach work_home/<admin>/) is
+            # intentional and harmless — writes through either path hit
+            # the same inodes on the host.
+            volume_bindings[get_work_home()] = {"bind": "/host", "mode": "rw"}
+        else:
+            # Build the inter-container share mount spec for peers only.
+            # Failures here (e.g. permission errors creating the share
+            # dir) are returned to the agent BEFORE touching the daemon,
+            # so a bad config never leaves a half-created container behind.
+            try:
+                share_bindings = _build_share_bindings(name)
+            except OSError as e:
+                return TargetInfo(
+                    name=name,
+                    backend="docker",
+                    status="error",
+                    purpose=purpose,
+                    error=f"failed to set up share dir: {e}",
+                )
+            volume_bindings.update(share_bindings)
 
         # Reconciliation labels: identify containers this backend owns so
         # :meth:`list_managed_containers` can re-discover them after the

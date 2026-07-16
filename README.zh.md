@@ -120,7 +120,7 @@ default_search_limit = 50
 [default_machine]       # 可选：启动时自动准备一个默认 machine
 enabled = false         # false = 懒加载（agent 自己创建首个 machine）
 backend = "docker"      # "docker" 或 "ssh"
-name = "default"
+name = "admin"          # 默认 "admin" -> 触发 admin mount 布局
 purpose = ""            # 后端参数在 [docker] / [ssh] 里，不在这里
 ```
 
@@ -164,6 +164,9 @@ name = "dev"
   （而不是重建）。
 - 准备失败是**致命的**（fail-closed）：既然你开启了此选项，启动时拿不到
   默认 machine 就会让 agent 在首次使用时踩空，不如直接拒绝启动并报清晰错误。
+- `name` 默认是 `"admin"`。`admin_machine` 启用且 `name = "admin"` 时,
+  `DockerBackend.create` 检测到名字匹配,自动应用 [admin mount 布局](#admin-机器跨机器运维)。
+  想脱离 admin 改用普通 peer 作默认,显式设 `name = "dev"` 之类即可。
 - `docker_run` 现在**会话内幂等**：若同名容器已存在，会重新挂载（已停止则
   启动），而不是因名字冲突报错。响应里带 `note`（"reattached to existing
   container ..."），让 agent 知道这是复用而非新建。
@@ -311,21 +314,21 @@ agent 无法把宿主路径走私进容器:
 #### 容器间共享目录
 
 每次 `docker_run` 都会自动 bind-mount `work_home/<share_subdir>/`
-(默认 `_share/`) 到容器内的 `/workspace/.share/`。挂载规格固定为两
+(默认 `_share/`) 到容器内的 `/workspace/share/`。挂载规格固定为两
 条 bind,跟 peer 数量无关:
 
-1. 整个 share 根目录以 **ro** 挂到 `/workspace/.share/`
+1. 整个 share 根目录以 **ro** 挂到 `/workspace/share/`
 2. 容器自己的子目录 `work_home/_share/<machine>/` 以 **rw** 覆盖到
-   `/workspace/.share/<machine>/` —— agent 可以写自己的产物,但 ro
+   `/workspace/share/<machine>/` —— agent 可以写自己的产物,但 ro
    父挂载会阻止对任何 peer 子目录的写(内核 mount flag 强制)
 
 约定:
 
 ```text
 # 在 "dev" 容器内:
-echo "build output" > /workspace/.share/dev/result.txt      # self rw
-cat /workspace/.share/alice/notes.md                        # peer ro (经父挂载)
-ls /workspace/.share/                                       # 发现 peer
+echo "build output" > /workspace/share/dev/result.txt       # self rw
+cat /workspace/share/alice/notes.md                         # peer ro (经父挂载)
+ls /workspace/share/                                        # 发现 peer
 ```
 
 **新 peer 自动可见**。因为父挂载覆盖整个 `_share/` 树,内核在访问时
@@ -337,6 +340,77 @@ ls /workspace/.share/                                       # 发现 peer
 这是 sandbox 文件写入边界向 `docker_run` 的延伸 —— **第一道防线**。
 容器与宿主共享内核,内核能力逃逸(`unshare`、内核 CVE)仍需 rootless
 docker 或 gVisor (`runsc`) 等更强的隔离手段来堵。
+
+#### Admin 机器(跨机器运维)
+
+**Admin 机器**是一个特殊容器,完全靠**名字**识别。两个配置协同:
+
+- **`[docker] admin_machine`**(`admin` 默认;空字符串关闭)——
+  **功能开关 + 名字**。非空时,`DockerBackend.create` 检测到匹配的
+  名字就走下面的 god-mode mount;为空时,任何名字都不触发。
+- **`[default_machine] enabled = true`** + `name = "admin"`(默认值)
+  —— 通过既有的 default-machine 机制真正创建容器。把 `name` 改成
+  其他(如 `"dev"`)就脱离 admin,改为普通 peer 作默认。
+
+普通 peer 的 mount 布局:
+
+| 容器内挂载点              | 宿主源路径                          | 模式 |
+|---------------------------|-------------------------------------|------|
+| `/workspace`              | `work_home/<name>/`                 | rw   |
+| `/workspace/share`        | `work_home/_share/`                 | ro   |
+| `/workspace/share/<self>` | `work_home/_share/<self>/`          | rw   |
+
+Admin mount 布局(当 `name == admin_machine`):
+
+  | 容器内挂载点 | 宿主源路径              | 模式 | 用途 |
+  |--------------|-------------------------|------|------|
+  | `/workspace` | `work_home/admin/`      | rw   | admin 自己的 scratch |
+  | `/host`      | `work_home/` (整棵)     | rw   | 全局视图:所有 peer + share |
+
+  跳过 share bindings(`/workspace/share/*`)——全局 `/host` 挂载已覆盖 `work_home/_share/`。
+
+**约定:**
+
+```text
+# 在 "admin" 容器内:
+ls /workspace/             # admin 自己的 scratch
+ls /host/                  # 所有 workspace + _share + admin/
+ls /host/dev/              # peer 的 workspace (约定上只读)
+rm -rf /host/dev/build     # 清理 peer 的陈旧构建
+cp /workspace/notes.txt /host/alice/        # 投递给 peer
+cat /host/_share/bob/log.txt                # 读 peer 的 share 输出
+```
+
+**为什么两条 mount:** 让 agent 默认在 `/workspace` 写自己的东西;要跨机器
+操作必须显式走 `/host/<peer>/...`,这样 agent 的命令历史能清楚看到「这是
+跨机器操作」。两个路径在 `work_home/admin/` 上重叠(同一组 inode),任一
+路径写入都落到同一份数据。
+
+**WARNING — god-mode 容器。** `/host` 是 rw 且覆盖所有 peer 的 workspace。
+这里的操作**不可逆**,可能影响正在运行的 peer。慎用 —— 优先让 peer 各自清理
+自己的 `/workspace`。
+
+**配置示例** —— 让 admin 成为初始默认:
+
+```toml
+[docker]
+admin_machine = "admin"   # 功能开关(默认 ON,名字 = "admin")
+
+[default_machine]
+enabled = true            # 启用自动创建
+name = "admin"            # 默认 —— 触发 admin 容器创建
+```
+
+`default_machine` 调用 `DockerBackend.create("admin", ...)`,
+`create` 检测到名字匹配就用 god-mode mount。server 启动路径里没有任何
+admin 特判。
+
+**升级已有部署:** 如果名为 `admin` 的容器已经作为 peer 存在(挂的是
+`work_home/admin/`),先 `docker_remove admin`(或 host 上 `docker rm admin`),
+server 下次启动会按 admin 规则重建。不自动迁移 —— 否则会沉默失败。
+
+关闭:`[docker] admin_machine = ""`(env: `SANDBOX_MCP_DOCKER_ADMIN_MACHINE`)。
+设为空后,`admin` 这个名字就是普通 peer(自己 mount + share,没有 `/host`)。
 
 ### 连接远程 Docker Daemon
 

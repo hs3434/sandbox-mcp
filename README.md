@@ -125,7 +125,7 @@ default_search_limit = 50
 [default_machine]       # opt-in: provision a default machine at startup
 enabled = false         # false = lazy (agent creates its first machine)
 backend = "docker"      # "docker" or "ssh"
-name = "default"
+name = "admin"          # defaults to "admin" -> triggers admin mount layout
 purpose = ""            # backend params live in [docker] / [ssh], not here
 ```
 
@@ -173,6 +173,11 @@ Behaviour:
 - Provisioning failure is **fatal** (fail-closed): the operator opted in,
   so a missing default machine would surprise the agent at first use. The
   server refuses to start with a clear error instead.
+- `name` defaults to `"admin"`.  When `admin_machine` is enabled and
+  `name = "admin"`, `DockerBackend.create` detects the match and applies
+  the [admin mount layout](#admin-machine-cross-machine-ops)
+  automatically.  Pick any other name (e.g. `name = "dev"`) to opt out
+  of admin and provision a normal peer as the default.
 - `docker_run` is now **idempotent within a session**: if a container with
   the requested name already exists, it reattaches (starting it if stopped)
   rather than erroring on the name conflict. The response carries a `note`
@@ -330,13 +335,13 @@ container:
 #### Inter-container share directory
 
 Every `docker_run` automatically bind-mounts `work_home/<share_subdir>/`
-(default `_share/`) into the container at `/workspace/.share/`.  The
+(default `_share/`) into the container at `/workspace/share/`.  The
 mount spec is fixed at two bind mounts, regardless of how many peer
 containers exist:
 
-1. The whole share root is mounted **read-only** at `/workspace/.share/`.
+1. The whole share root is mounted **read-only** at `/workspace/share/`.
 2. The container's own subdirectory `work_home/_share/<machine>/` is
-   overlaid **read-write** at `/workspace/.share/<machine>/` — the
+   overlaid **read-write** at `/workspace/share/<machine>/` — the
    agent can drop its own output, but the ro parent mount still blocks
    writes to any peer subdirectory (kernel-enforced mount flag).
 
@@ -344,9 +349,9 @@ Convention:
 
 ```text
 # inside the "dev" container:
-echo "build output" > /workspace/.share/dev/result.txt      # self rw
-cat /workspace/.share/alice/notes.md                        # peer ro (via parent ro)
-ls /workspace/.share/                                       # discover peers
+echo "build output" > /workspace/share/dev/result.txt       # self rw
+cat /workspace/share/alice/notes.md                         # peer ro (via parent ro)
+ls /workspace/share/                                        # discover peers
 ```
 
 **New peers appear automatically.** Because the parent mount covers
@@ -363,6 +368,87 @@ file-write boundary extends into `docker_run`. **Caveats** still apply:
 the container shares the host kernel, so kernel-capability exploits
 (`unshare`, kernel CVEs) are not stopped by this. For stronger
 isolation, deploy with rootless docker or gVisor (`runsc`).
+
+#### Admin machine (cross-machine ops)
+
+The **admin machine** is a special container identified purely by
+name.  Two configs collaborate:
+
+- **`[docker] admin_machine`** (`admin` by default; empty disables) —
+  the **feature flag + name**.  When non-empty, `DockerBackend.create`
+  detects matching names and applies the god-mode mount layout below.
+  When empty, no name triggers it.
+- **`[default_machine] enabled = true`** + `name = "admin"` (the
+  default) — drives actual container creation via the existing
+  default-machine machinery.  Set `name` to anything else (e.g.
+  `"dev"`) to opt out of admin and provision a normal peer as default.
+
+Default mount layout (peer container):
+
+| Container mount | Source (host)                      | Mode |
+|-----------------|------------------------------------|------|
+| `/workspace`    | `work_home/<name>/`                | rw   |
+| `/workspace/share` | `work_home/_share/`             | ro   |
+| `/workspace/share/<self>` | `work_home/_share/<self>/` | rw   |
+
+Admin mount layout (when `name == admin_machine`):
+
+| Container mount | Source (host)                  | Mode | Purpose |
+|-----------------|--------------------------------|------|---------|
+| `/workspace`    | `work_home/admin/`             | rw   | own scratch |
+| `/host`         | `work_home/` (whole tree)      | rw   | global view: every peer + share |
+
+  Share bindings (`/workspace/share/*`) are skipped because the
+  global `/host` mount already covers `work_home/_share/`.
+
+**Convention:**
+
+```text
+# inside the "admin" container:
+ls /workspace/             # admin's own scratch
+ls /host/                  # ALL workspaces + _share + admin/
+ls /host/dev/              # peer's workspace (read-only by convention)
+rm -rf /host/dev/build     # clean up a peer's stale build
+cp /workspace/notes.txt /host/alice/        # deliver to a peer
+cat /host/_share/bob/log.txt                # read peer's share output
+```
+
+**Why two mounts:** agents should default to `/workspace` for their own
+work.  Targeting `/host/<peer>/...` makes the cross-machine intent
+explicit and visible in the agent's command history.  Both paths
+overlap on `work_home/admin/` (same inodes), so writes through either
+path land on the same data.
+
+**WARNING — god-mode container.** `/host` is rw and covers every peer's
+workspace.  Operations there are **irreversible** and can affect
+concurrent peer work.  Use sparingly — prefer peers cleaning their
+own `/workspace` whenever possible.
+
+**Provisioning pattern** — to make admin the initial default:
+
+```toml
+[docker]
+admin_machine = "admin"   # feature flag (default ON, name = "admin")
+
+[default_machine]
+enabled = true            # opt in to auto-create
+name = "admin"            # default — drives the admin container creation
+```
+
+`default_machine` calls `DockerBackend.create("admin", ...)`, which
+detects the name match and applies the god-mode mount layout.  No
+special-casing in the server startup path.
+
+**Upgrading an existing deployment:** if a container named `admin`
+already exists as a peer (with the per-machine `work_home/admin/`
+mount), remove it first: `docker_remove admin` (or
+`docker rm admin` on the host).  The server will recreate it with the
+admin mount on the next start.  No auto-migration — silent failure
+otherwise.
+
+Disable by setting `[docker] admin_machine = ""` (env:
+`SANDBOX_MCP_DOCKER_ADMIN_MACHINE`).  With it empty, the name `admin`
+behaves like any peer (own mount + share, no `/host`).
 
 ### Connecting to a Remote Docker Daemon
 

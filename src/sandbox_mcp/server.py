@@ -312,6 +312,10 @@ class SandboxServer:
         # for a guaranteed default, so surprising the agent at first use
         # is worse than refusing to start.  Runs after docker_ps so a
         # surviving default container is re-adopted, not re-created.
+        #
+        # When the default name matches ``[docker] admin_machine``,
+        # ``DockerBackend.create`` detects it and applies the god-mode
+        # mount layout automatically — no special-casing needed here.
         self._provision_default_machine()
 
     def _provision_default_machine(self) -> None:
@@ -321,6 +325,10 @@ class SandboxServer:
         ``enabled`` is false this is a no-op (the historical lazy
         behaviour).  When enabled, a provisioning failure raises
         ``RuntimeError`` and the server refuses to start.
+
+        The created container's mount layout depends on whether its
+        ``name`` matches ``[docker] admin_machine`` — see
+        :meth:`DockerBackend.create` for the admin branch.
         """
         cfg = _load_config().default_machine
         if not cfg.enabled:

@@ -66,10 +66,10 @@ class StorageConfig:
     work_home: Path = field(default_factory=lambda: Path.home() / ".sandbox-mcp" / "workspaces")
     # Sub-directory under work_home used as the inter-container shared
     # workspace.  Every container bind-mounts ``work_home/<share_subdir>/<self>/``
-    # rw into ``/workspace/.share/<self>/``, plus every other peer
+    # rw into ``/workspace/share/<self>/``, plus every other peer
     # subdirectory read-only — agents collaborate by reading
-    # ``/workspace/.share/<peer>/...`` and writing to
-    # ``/workspace/.share/<self>/...``.  Empty string disables the feature.
+    # ``/workspace/share/<peer>/...`` and writing to
+    # ``/workspace/share/<self>/...``.  Empty string disables the feature.
     share_subdir: str = "_share"
 
     def __post_init__(self) -> None:
@@ -91,6 +91,28 @@ class DockerConfig:
     # User-defined bridge network for DNS-resolvable container-to-container
     # communication.  Created lazily on first docker_run.  Empty = no network.
     auto_network: str = "sandbox-mcp"
+
+    # Special container name treated as the "admin" machine.  Identified
+    # purely by name (no extra docker label), so legacy/manual containers
+    # named this work as-is.
+    #
+    # This field is a **feature flag + name**, NOT a creation trigger.
+    # When non-empty, ``DockerBackend.create`` detects matching names
+    # and applies the god-mode mount layout (own scratch + whole
+    # ``work_home`` at ``/host``).  When empty, the admin mount layout
+    # is disabled entirely — no name triggers it.
+    #
+    # Actual container creation is driven by ``[default_machine]`` (or
+    # an explicit ``docker_run name=admin``): turn the admin feature on
+    # here, then provision via the existing default-machine machinery.
+    # To make admin the initial default, set
+    # ``[default_machine] enabled = true`` (name defaults to ``admin``).
+    admin_machine: str = "admin"
+    # Image used when provisioning the admin container.  Empty falls
+    # back to ``default_image`` — keep them in sync unless the admin
+    # genuinely needs a different toolchain (e.g. busybox for
+    # space-constrained cleanups).
+    admin_image: str = ""
 
     # Docker daemon connection.  Empty ``host`` falls back to ``from_env()``,
     # which reads ``$DOCKER_HOST`` / ``$DOCKER_TLS_VERIFY`` / ``$DOCKER_CERT_PATH``
@@ -159,7 +181,11 @@ class DefaultMachineConfig:
 
     enabled: bool = False
     backend: str = "docker"  # "docker" or "ssh"
-    name: str = "default"
+    # Defaults to ``admin`` so an operator who enables ``[default_machine]``
+    # without picking a name gets the admin machine — the admin system
+    # (see ``[docker] admin_machine``) takes over the provisioning and
+    # ``_provision_default_machine`` skips the duplicate work.
+    name: str = "admin"
     purpose: str = ""
 
 
@@ -201,6 +227,8 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "docker_restart_max_retry_count": ("docker", "restart_max_retry_count", int),
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
         "docker_auto_network": ("docker", "auto_network", str),
+        "docker_admin_machine": ("docker", "admin_machine", str),
+        "docker_admin_image": ("docker", "admin_image", str),
         "docker_host": ("docker", "host", str),
         "docker_tls_verify": ("docker", "tls_verify", _as_bool),
         "docker_cert_path": ("docker", "cert_path", str),

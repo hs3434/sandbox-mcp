@@ -43,7 +43,7 @@ work_home = "~/.sandbox-mcp/workspaces/"
 # Sub-directory under work_home used as the inter-container shared
 # workspace (see docs/sandbox-boundary.md).  Every docker_run auto-
 # mounts work_home/<share_subdir>/<machine>/ rw into the container at
-# /workspace/.share/<machine>/, plus every peer subdirectory read-only,
+# /workspace/share/<machine>/, plus every peer subdirectory read-only,
 # so containers collaborate via the filesystem without any per-run
 # configuration.  Set to "" (empty string) to disable the share mount.
 # Overridable via $SANDBOX_MCP_STORAGE_SHARE_SUBDIR.
@@ -86,6 +86,34 @@ auto_network = "sandbox-mcp"
 host = ""
 tls_verify = false
 cert_path = ""
+
+# Admin machine: a special container identified purely by name (no extra
+# docker label) that gets a "god-mode" mount layout — its own workspace
+# at ``/workspace`` PLUS the whole ``work_home`` tree at ``/host`` (rw).
+# This lets the agent do cross-machine cleanup, listing, and data
+# movement without a dedicated ``workspace_clean`` action.
+#
+# IMPORTANT: this field is a **feature flag + name**, not a creation
+# trigger.  When non-empty, ``DockerBackend.create`` detects matching
+# names and applies the god-mode mount.  When empty, no name triggers it
+# (admin is just a regular peer).
+#
+# Actual container creation is driven by ``[default_machine]`` (or an
+# explicit ``docker_run name=admin``).  To make admin the initial
+# default, set:
+#
+#   [default_machine]
+#   enabled = true
+#   name = "admin"   # the default — matches admin_machine above
+#
+# WARNING: ``/host`` is rw and covers every peer's workspace.  Operations
+# there are irreversible.  Agents should default to ``/workspace`` for
+# their own work and target ``/host/<peer>/...`` only when explicitly
+# managing a peer.  Upgrading an existing deployment: if a container named
+# this already exists as a peer, ``docker_remove <name>`` it first so the
+# server recreates it with the admin mount (no auto-migration).
+admin_machine = "admin"
+admin_image = ""            # empty = fall back to default_image
 
 [ssh]
 connect_timeout = 10
@@ -135,5 +163,9 @@ default_search_limit = 50
 # = [ssh] default_host / default_user / default_port / default_key.
 enabled = false
 backend = "docker"       # "docker" or "ssh"
-name = "default"
+# Defaults to "admin" so enabling [default_machine] without naming a
+# machine provisions the admin container (see [docker] admin_machine).
+# DockerBackend.create detects the name match and applies the god-mode
+# mount layout — no special-casing in the startup path.
+name = "admin"
 purpose = ""
