@@ -698,6 +698,52 @@ class DockerBackend(Backend):
             },
         }
 
+    def logs(
+        self,
+        name: str,
+        *,
+        tail: int = 200,
+        since: str | None = None,
+        until: str | None = None,
+        timestamps: bool = False,
+    ) -> dict:
+        """Read container logs (one-shot, merged stdout+stderr).
+
+        ``tail`` is capped at 10000 to prevent token-bombing a single
+        response.  ``since`` / ``until`` accept RFC 3339 timestamps or
+        relative durations (``"10m"``, ``"1h"``) — both formats are
+        accepted by the docker daemon.
+
+        Works against stopped containers: docker keeps the log buffer
+        past exit, which is the primary use case (read why a container
+        died).
+        """
+        if not isinstance(tail, int) or tail < 1 or tail > 10000:
+            return {
+                "error": f"tail must be between 1 and 10000, got {tail!r}",
+                "status": "error",
+            }
+        docker = _docker_module()
+        try:
+            container = self._ensure_client().containers.get(name)
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        try:
+            raw = container.logs(
+                tail=tail, since=since, until=until, timestamps=timestamps
+            )
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw or "")
+        # The daemon doesn't expose exact line counts for the response,
+        # so we can't cheaply tell whether more lines existed beyond
+        # ``tail``.  Default to ``False``; callers who need certainty can
+        # re-fetch with a larger ``tail`` or a tighter ``since``/``until``.
+        truncated = False
+        return {"logs": text, "truncated": truncated}
+
     def build(
         self,
         image_tag: str,

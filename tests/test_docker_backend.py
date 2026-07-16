@@ -1067,4 +1067,68 @@ def test_docker_inspect_container_not_found(docker_backend, mock_client):
     assert "not here" in result["error"]
 
 
+# ---- logs() ----
+
+
+def test_docker_logs_default_tail_200(docker_backend, mock_client):
+    """Default tail is 200 lines."""
+    container = mock_client.containers.get.return_value
+    container.logs.return_value = b"line1\nline2\n"
+
+    result = docker_backend.logs("dev")
+
+    container.logs.assert_called_once_with(
+        tail=200, since=None, until=None, timestamps=False
+    )
+    assert result["logs"] == "line1\nline2\n"
+    assert result["truncated"] is False
+
+
+def test_docker_logs_passes_through_filters(docker_backend, mock_client):
+    """since/until/timestamps/tail flow through to the SDK."""
+    container = mock_client.containers.get.return_value
+    container.logs.return_value = b""
+
+    docker_backend.logs(
+        "dev",
+        tail=50,
+        since="2026-07-16T10:00:00Z",
+        until="10m",
+        timestamps=True,
+    )
+
+    container.logs.assert_called_once_with(
+        tail=50,
+        since="2026-07-16T10:00:00Z",
+        until="10m",
+        timestamps=True,
+    )
+
+
+def test_docker_logs_rejects_tail_above_cap(docker_backend, mock_client):
+    """Tail > 10000 is rejected with error (prevents token-bombing)."""
+    result = docker_backend.logs("dev", tail=99999)
+    assert result["status"] == "error"
+    assert "10000" in result["error"]
+
+
+def test_docker_logs_container_not_found(docker_backend, mock_client):
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.get.side_effect = DockerNotFound("nope")
+
+    result = docker_backend.logs("ghost")
+    assert result["status"] == "error"
+
+
+def test_docker_logs_decodes_bytes_with_replacement(docker_backend, mock_client):
+    """Garbage bytes don't crash — utf-8 with errors='replace'."""
+    container = mock_client.containers.get.return_value
+    container.logs.return_value = b"good \xff\xfe bad"
+
+    result = docker_backend.logs("dev")
+    assert "good" in result["logs"]
+    assert "bad" in result["logs"]
+
+
 
