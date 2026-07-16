@@ -736,10 +736,7 @@ class DockerBackend(Backend):
         except (docker.errors.NotFound, docker.errors.APIError) as e:
             return {"error": str(e.explanation or e), "status": "error"}
 
-        if isinstance(raw, bytes):
-            text = raw.decode("utf-8", errors="replace")
-        else:
-            text = str(raw or "")
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw or "")
         # Heuristic: if the daemon returned at least `tail` newlines, the
         # output was clipped (we asked for tail lines and got tail-or-more,
         # so there might be more we didn't get).  Not exact — a tail line
