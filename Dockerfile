@@ -1,10 +1,5 @@
-# Build with proxy:
-# docker build \
-#   --build-arg HTTP_PROXY=http://host.docker.internal:7890 \
-#   --build-arg HTTPS_PROXY=http://host.docker.internal:7890 \
-#   --build-arg NO_PROXY=localhost,127.0.0.1 \
-#   -t sandbox-mcp .
-
+# docker build -t sandbox-mcp .
+ 
 FROM python:3.12-slim
 
 # openssh-client: required by the SSH backend (subprocess ssh/scp calls)
