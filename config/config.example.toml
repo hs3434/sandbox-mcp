@@ -42,8 +42,8 @@ work_home = "~/.sandbox-mcp/workspaces/"
 
 [audit]
 # Audit log destination. Default: ~/.sandbox-mcp/audit.db (SQLite).
-# A file-backed path enables the sandbox_audit_query self-audit tool.
-#   "" (empty)           = write to stderr (sandbox_audit_query hidden)
+# A file-backed path enables the audit_query self-audit tool.
+#   "" (empty)           = write to stderr (audit_query hidden)
 #   ".../audit.db"       = SQLite database (recommended; supports the
 #                          self-audit tool with indexed queries)
 #   "....jsonl"/other    = append-only JSON-line file (legacy, no
@@ -51,7 +51,7 @@ work_home = "~/.sandbox-mcp/workspaces/"
 log_path = "~/.sandbox-mcp/audit.db"
 
 [docker]
-default_image = "debian:stable-slim"
+default_image = "python:3.14-slim"
 restart_policy_name = "on-failure"
 restart_max_retry_count = 3
 
@@ -112,7 +112,7 @@ default_search_limit = 50
 
 [default_machine]
 # Opt-in: provision a default machine at startup so the agent can use
-# sandbox_shell_exec / sandbox_file_* immediately, without an explicit
+# shell_exec / file_* immediately, without an explicit
 # docker_run / ssh_connect.  Disabled by default -- the historical
 # behaviour is lazy (the agent creates its first machine on demand).
 #
