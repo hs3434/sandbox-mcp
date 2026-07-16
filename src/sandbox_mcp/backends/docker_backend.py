@@ -862,6 +862,24 @@ class DockerBackend(Backend):
         write_bytes = sum((e.get("value") or 0) for e in entries if e.get("op") == "Write")
         return {"read_bytes": read_bytes, "write_bytes": write_bytes}
 
+    def restart(self, name: str, timeout: int = 10) -> TargetInfo:
+        """Atomic restart: stop then start, then verify the container
+        actually stayed up.  A crashing command exits within ms of
+        ``restart()`` returning — we re-check ``State.Status`` and
+        surface a diagnostic if the container died, matching the
+        ``start()`` semantics.
+        """
+        docker = _docker_module()
+        try:
+            container = self._ensure_client().containers.get(name)
+            container.restart(timeout=timeout)
+        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            return TargetInfo(name=name, backend="docker", status="error", error=str(e))
+
+        # Use _running_info to confirm the container actually came back.
+        info = self._running_info(container, name)
+        return info
+
     def build(
         self,
         image_tag: str,

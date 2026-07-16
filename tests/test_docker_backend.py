@@ -1275,4 +1275,52 @@ def test_docker_stats_handles_zero_cpu_delta(docker_backend, mock_client):
     assert result["block_io"] == {"read_bytes": 0, "write_bytes": 0}
 
 
+# ---- restart() ----
+
+
+def test_docker_restart_succeeds(docker_backend, mock_client):
+    """A clean restart reports 'running' and uses the default 10s timeout."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {"State": {"Status": "running", "Running": True}}
+
+    info = docker_backend.restart("dev")
+
+    container.restart.assert_called_once_with(timeout=10)
+    assert info.name == "dev"
+    assert info.status == "running"
+
+
+def test_docker_restart_passes_timeout(docker_backend, mock_client):
+    """Custom timeout flows to container.restart()."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {"State": {"Status": "running", "Running": True}}
+
+    docker_backend.restart("dev", timeout=30)
+    container.restart.assert_called_once_with(timeout=30)
+
+
+def test_docker_restart_container_not_found(docker_backend, mock_client):
+    from docker.errors import NotFound as DockerNotFound
+
+    mock_client.containers.get.side_effect = DockerNotFound("nope")
+
+    info = docker_backend.restart("ghost")
+    assert info.status == "error"
+
+
+def test_docker_restart_surfaces_crash_diagnostic(docker_backend, mock_client):
+    """Container whose CMD crashes post-restart reports error + log tail,
+    not 'running' (matches _running_info post-check semantics)."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {"State": {"Status": "exited", "ExitCode": 127}}
+    container.logs.return_value = b"sleep: command not found\n"
+
+    info = docker_backend.restart("dev")
+
+    assert info.status == "error"
+    assert "exited" in info.error
+    assert "exit_code=127" in info.error
+    assert "sleep: command not found" in info.error
+
+
 
