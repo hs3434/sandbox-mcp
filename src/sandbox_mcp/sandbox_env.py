@@ -593,7 +593,7 @@ class SandboxEnv:
         if not isinstance(backend, DockerBackend):
             return {"error": "docker_restart only supported on Docker machines"}
         info = backend.restart(machine, timeout=int(params.get("timeout", 10)))
-        result = {"machine": info.name, "status": info.status}
+        result = {"machine": machine, "status": info.status}
         if info.error:
             result["error"] = info.error
         return result
