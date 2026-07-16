@@ -1122,13 +1122,37 @@ def test_docker_logs_container_not_found(docker_backend, mock_client):
 
 
 def test_docker_logs_decodes_bytes_with_replacement(docker_backend, mock_client):
-    """Garbage bytes don't crash — utf-8 with errors='replace'."""
+    """Garbage bytes don't crash — utf-8 with errors='replace' inserts U+FFFD."""
     container = mock_client.containers.get.return_value
     container.logs.return_value = b"good \xff\xfe bad"
 
     result = docker_backend.logs("dev")
     assert "good" in result["logs"]
     assert "bad" in result["logs"]
+    assert "\ufffd" in result["logs"], (
+        f"expected U+FFFD replacement char in {result['logs']!r}"
+    )
+
+
+def test_docker_logs_marks_truncated_when_line_count_meets_tail(docker_backend, mock_client):
+    """truncated=True when the daemon returned at least `tail` newlines —
+    a soft signal that the output was clipped."""
+    container = mock_client.containers.get.return_value
+    container.logs.return_value = b"a\nb\nc\n"  # 3 lines, 3 newlines
+
+    result = docker_backend.logs("dev", tail=2)
+
+    assert result["truncated"] is True
+
+
+def test_docker_logs_marks_not_truncated_when_under_tail(docker_backend, mock_client):
+    """truncated=False when output has fewer lines than tail."""
+    container = mock_client.containers.get.return_value
+    container.logs.return_value = b"a\nb\n"  # 2 lines, 2 newlines
+
+    result = docker_backend.logs("dev", tail=5)
+
+    assert result["truncated"] is False
 
 
 

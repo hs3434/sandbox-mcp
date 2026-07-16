@@ -736,12 +736,17 @@ class DockerBackend(Backend):
         except (docker.errors.NotFound, docker.errors.APIError) as e:
             return {"error": str(e.explanation or e), "status": "error"}
 
-        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw or "")
-        # The daemon doesn't expose exact line counts for the response,
-        # so we can't cheaply tell whether more lines existed beyond
-        # ``tail``.  Default to ``False``; callers who need certainty can
-        # re-fetch with a larger ``tail`` or a tighter ``since``/``until``.
-        truncated = False
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", errors="replace")
+        else:
+            text = str(raw or "")
+        # Heuristic: if the daemon returned at least `tail` newlines, the
+        # output was clipped (we asked for tail lines and got tail-or-more,
+        # so there might be more we didn't get).  Not exact — a tail line
+        # without a trailing newline counts as 0 — but it's the best signal
+        # we have without round-tripping with the daemon.
+        line_count = text.count("\n")
+        truncated = line_count >= tail
         return {"logs": text, "truncated": truncated}
 
     def build(
