@@ -224,7 +224,7 @@ DOCKER_HELP_RESPONSE = {
                 "NetworkSettings, HostConfig)."
             ),
             "required": {"machine": "string"},
-            "optional": {"raw": "bool - default false"},
+            "optional": {"raw": "bool — default false"},
             "returns": {"id": "string", "name": "string", "image": "string",
                         "created": "string (ISO 8601)",
                         "started_at": "string (ISO 8601)",
@@ -242,10 +242,10 @@ DOCKER_HELP_RESPONSE = {
             ),
             "required": {"machine": "string"},
             "optional": {
-                "tail": "int - default 200, max 10000",
-                "since": "string - ISO 8601 or relative (e.g. 10m)",
-                "until": "string - same format as since",
-                "timestamps": "bool - prefix each line with RFC 3339 ts",
+                "tail": "int — default 200, max 10000",
+                "since": "string — ISO 8601 or relative (e.g. 10m)",
+                "until": "string — same format as since",
+                "timestamps": "bool — prefix each line with RFC 3339 ts",
             },
             "returns": {"logs": "string", "truncated": "bool"},
         },
@@ -271,7 +271,7 @@ DOCKER_HELP_RESPONSE = {
                 "is request/response; call again for the next snapshot)."
             ),
             "required": {"machine": "string"},
-            "optional": {"stream": "bool - default false; rejected if true"},
+            "optional": {"stream": "bool — default false; rejected if true"},
             "returns": {"cpu_percent": "number", "memory": "object",
                         "network": "object", "block_io": "object"},
         },
@@ -284,7 +284,7 @@ DOCKER_HELP_RESPONSE = {
                 "stopped container this is equivalent to docker_start."
             ),
             "required": {"machine": "string"},
-            "optional": {"timeout": "int - default 10 (seconds for stop phase)"},
+            "optional": {"timeout": "int — default 10 (seconds for stop phase)"},
             "returns": {"machine": "string", "status": "running|error",
                         "error": "string (on failure)"},
         },

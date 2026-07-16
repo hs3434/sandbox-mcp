@@ -1323,4 +1323,19 @@ def test_docker_restart_surfaces_crash_diagnostic(docker_backend, mock_client):
     assert "sleep: command not found" in info.error
 
 
+def test_docker_restart_error_says_after_restart_not_after_start(docker_backend, mock_client):
+    """The diagnostic message from _running_info must say 'after restart'
+    when invoked by docker_restart, not 'after start' (the operation
+    was a restart, not a bare start)."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {"State": {"Status": "exited", "ExitCode": 1}}
+    container.logs.return_value = b""
+
+    info = docker_backend.restart("dev")
+
+    assert info.status == "error"
+    assert "after restart" in info.error
+    assert "after start" not in info.error
+
+
 

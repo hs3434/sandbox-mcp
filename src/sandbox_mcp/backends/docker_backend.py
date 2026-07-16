@@ -495,7 +495,14 @@ class DockerBackend(Backend):
         return self._running_info(container, name, purpose=existing_purpose, image=image, note=note)
 
     def _running_info(
-        self, container, name: str, purpose: str = "", image: str = "", note: str = ""
+        self,
+        container,
+        name: str,
+        purpose: str = "",
+        image: str = "",
+        note: str = "",
+        *,
+        op_label: str = "start",
     ) -> TargetInfo:
         """Build a TargetInfo reflecting the container's TRUE state after a
         start attempt.
@@ -531,7 +538,7 @@ class DockerBackend(Backend):
                 note=note,
             )
         # Not running -- assemble a diagnostic hint.
-        parts = [f"container is {status!r} after start"]
+        parts = [f"container is {status!r} after {op_label}"]
         exit_code = state.get("ExitCode")
         if exit_code not in (None, 0):
             parts.append(f"exit_code={exit_code}")
@@ -874,7 +881,7 @@ class DockerBackend(Backend):
             return TargetInfo(name=name, backend="docker", status="error", error=str(e))
 
         # Use _running_info to confirm the container actually came back.
-        info = self._running_info(container, name)
+        info = self._running_info(container, name, op_label="restart")
         return info
 
     def build(
