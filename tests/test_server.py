@@ -22,6 +22,23 @@ import pytest
 from sandbox_mcp.server import SandboxServer
 
 
+@pytest.fixture(autouse=True)
+def _disable_default_machine(monkeypatch):
+    """Unit tests run in lazy mode: opt-out of default-machine provisioning.
+
+    The shipped config enables [default_machine] so out-of-box installs
+    bring up an admin container.  Provisioning requires a real Docker
+    daemon, which is not available in this test environment — every
+    test that instantiates SandboxServer() would otherwise hit
+    ``failed to provision default machine 'admin'`` on the MagicMock.
+
+    Tests that DO exercise provisioning override this by setting
+    ``SANDBOX_MCP_DEFAULT_MACHINE_ENABLED=true`` after this fixture runs
+    (pytest's monkeypatch preserves later ``setenv`` calls).
+    """
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "false")
+
+
 @pytest.fixture
 def server():
     with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
@@ -160,8 +177,9 @@ def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
 
 
 def test_provision_default_machine_disabled_is_noop(monkeypatch):
-    """Default config (enabled=false): no provisioning, no default machine."""
-    monkeypatch.delenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", raising=False)
+    """enabled=false → no provisioning, no default machine."""
+    # Autouse fixture already set enabled=false; explicit for clarity.
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "false")
     with (
         patch("sandbox_mcp.server.DockerBackend") as mock_docker_cls,
         patch("sandbox_mcp.server.SSHBackend"),

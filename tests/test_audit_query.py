@@ -28,6 +28,13 @@ from sandbox_mcp.audit import (
     query_audit,
 )
 
+
+@pytest.fixture(autouse=True)
+def _disable_default_machine(monkeypatch):
+    """Unit tests run in lazy mode — see test_server.py for rationale."""
+    monkeypatch.setenv("SANDBOX_MCP_DEFAULT_MACHINE_ENABLED", "false")
+
+
 # ---------- AuditLogger SQLite write path ----------
 
 

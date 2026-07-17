@@ -111,7 +111,7 @@ class AuditConfig:
 
 @dataclass(frozen=True)
 class DockerConfig:
-    default_image: str = "debian:stable-slim"
+    default_image: str = "python:3.14-slim"
     restart_policy_name: str = "on-failure"
     restart_max_retry_count: int = 3
     write_tmp_prefix: str = "/tmp/.sandbox-mcp-write-"
@@ -201,7 +201,7 @@ class DefaultMachineConfig:
     ``default_port`` / ``default_key``.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     backend: str = "docker"  # "docker" or "ssh"
     # Defaults to ``admin`` so an operator who enables ``[default_machine]``
     # without picking a name gets the admin machine — the admin system

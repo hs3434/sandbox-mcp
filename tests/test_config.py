@@ -55,6 +55,9 @@ def test_load_defaults_when_no_file(monkeypatch, tmp_path):
     assert cfg.files == FilesConfig()
     assert cfg.default_machine == DefaultMachineConfig()
     assert cfg.storage.work_home == Path("/var/lib/sandbox-mcp")
+    # docker.default_image + default_machine.enabled must match config.example.toml
+    assert cfg.docker.default_image == "python:3.14-slim"
+    assert cfg.default_machine.enabled is True
 
 
 def test_load_from_toml(monkeypatch, tmp_path):
@@ -227,14 +230,15 @@ def test_repo_example_uses_known_sections():
 # ---- [default_machine] ----
 
 
-def test_default_machine_defaults_disabled():
-    """Default config keeps the historical lazy behaviour (no provisioning).
+def test_default_machine_defaults_enabled():
+    """Out-of-box default: provision an admin machine at startup.
 
-    [default_machine] holds only the trigger; backend params live in
-    their own sections ([docker] default_image, [ssh] default_*).
+    Aligns with config/config.example.toml.  Unit tests that don't want
+    provisioning opt out via SANDBOX_MCP_DEFAULT_MACHINE_ENABLED=false
+    (see test_server.py / test_audit_query.py autouse fixtures).
     """
     dm = DefaultMachineConfig()
-    assert dm.enabled is False
+    assert dm.enabled is True
     assert dm.backend == "docker"
     assert dm.name == "admin"
     assert dm.purpose == ""
