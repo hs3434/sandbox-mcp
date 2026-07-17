@@ -52,8 +52,8 @@ from pathlib import Path
 
 import mcp.types as types
 
+import sandbox_mcp.audit as audit_mod
 from sandbox_mcp.audit import (
-    DEFAULT_AUDIT_LOGGER,
     DEFAULT_TAIL,
     AuditLogger,
     query_audit,
@@ -303,7 +303,12 @@ class SandboxServer:
         self.sandbox_env = SandboxEnv(
             self.machines, self.shells, self._docker_backend, self._ssh_backend
         )
-        self.audit = audit if audit is not None else DEFAULT_AUDIT_LOGGER
+        # Look up DEFAULT_AUDIT_LOGGER via the module each time, not via
+        # a captured ``from X import Y`` binding — main_http() calls
+        # reset_default_logger() which rebinds the global; an imported
+        # snapshot would keep pointing at the *closed* old instance
+        # and every record() would silently no-op.
+        self.audit = audit if audit is not None else audit_mod.DEFAULT_AUDIT_LOGGER
         # Bootstrap: run ``docker_ps`` once before any request can be
         # served so pre-existing labeled containers are adopted into
         # the registry.  Failures are logged and tolerated so a

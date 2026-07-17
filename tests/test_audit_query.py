@@ -495,3 +495,44 @@ def test_handler_no_caching_sees_new_records(monkeypatch, tmp_path):
     data2 = _call_audit(srv)
     assert data2["total"] == 1
     assert data2["records"][0]["action"] == "between"
+
+
+# ---------- regression: import-snapshot stale DEFAULT_AUDIT_LOGGER ----------
+
+def test_sandbox_server_audit_not_stale_after_reset(monkeypatch):
+    """Regression: SandboxServer.audit must not hold a stale reference to
+    ``DEFAULT_AUDIT_LOGGER`` after ``reset_default_logger()`` runs.
+
+    Bug: ``from sandbox_mcp.audit import DEFAULT_AUDIT_LOGGER`` captures
+    the import-time instance.  main_http() calls reset_default_logger()
+    which closes the old instance and binds a fresh one — but
+    SandboxServer.__init__ still sees the closed one because the
+    ``from X import Y`` binding in server.py was not updated.
+
+    Symptom in production: every record() silently no-ops (the closed
+    logger's record() returns at the ``if self._closed: return`` line),
+    so the audit DB stays empty even though the HTTP server is
+    processing tool calls.
+    """
+    from sandbox_mcp import audit as audit_mod
+    from sandbox_mcp.audit import reset_default_logger
+    from sandbox_mcp.server import SandboxServer
+
+    initial = audit_mod.DEFAULT_AUDIT_LOGGER
+    assert initial._closed is False  # sanity
+
+    # Mimic main_http: rebuild the global before constructing the server.
+    reset_default_logger()
+
+    fresh = audit_mod.DEFAULT_AUDIT_LOGGER
+    assert fresh is not initial
+    assert initial._closed is True
+    assert fresh._closed is False
+
+    with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
+        srv = SandboxServer()
+
+    # The whole point: self.audit must be the CURRENT global, not the
+    # stale snapshot.
+    assert srv.audit is fresh
+    assert srv.audit._closed is False
