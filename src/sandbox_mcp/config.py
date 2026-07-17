@@ -66,9 +66,9 @@ class StorageConfig:
     work_home: Path = field(default_factory=lambda: Path.home() / ".sandbox-mcp" / "workspaces")
     # Sub-directory under work_home used as the inter-container shared
     # workspace.  Every container bind-mounts ``work_home/<share_subdir>/<self>/``
-    # rw into ``/share/<self>/`` (top-level, NOT under /workspace/), plus
-    # every other peer subdirectory read-only — agents collaborate by
-    # reading ``/share/<peer>/...`` and writing to ``/share/<self>/...``.
+    # rw into ``/share/<self>/``, plus every other peer subdirectory
+    # read-only — agents collaborate by reading ``/share/<peer>/...``
+    # and writing to ``/share/<self>/...``.
     # Empty string disables the feature.
     share_subdir: str = "_share"
 

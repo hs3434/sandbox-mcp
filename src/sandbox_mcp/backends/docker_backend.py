@@ -159,11 +159,8 @@ def _build_share_bindings(name: str) -> dict:
     Two mounts, fixed regardless of peer count:
 
     1. The whole share root is bind-mounted **read-only** at
-       ``/share/`` (top-level, NOT under ``/workspace/`` — visually
-       nesting it there would suggest a relationship that doesn't
-       exist: ``/workspace`` and ``/share`` are sibling host paths
-       with completely different roles).  The kernel evaluates a
-       mount's contents at access time, so peer subdirectories
+       ``/share/``.  The kernel evaluates a mount's contents at
+       access time, so peer subdirectories
        created *after* a container starts are visible to it on the
        next ``ls`` — no remount needed.
     2. The container's own subdirectory is overlaid **read-write** at
@@ -418,9 +415,7 @@ class DockerBackend(Backend):
         #   (2) the auto-discovered shared directory
         #       ``work_home/<share_subdir>/<name>`` → ``/share/<name>``
         #       (rw) plus every peer subdirectory read-only — see
-        #       ``_build_share_bindings``.  Note that ``/share`` lives at
-        #       the container's root, not under ``/workspace`` — the two
-        #       paths serve different roles and shouldn't visually nest.
+        #       ``_build_share_bindings``.
         #
         # EXCEPTION — the admin machine (name == ``docker.admin_machine``,
         # non-empty): it gets an ADDITIONAL mount
