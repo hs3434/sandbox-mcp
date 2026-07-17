@@ -341,6 +341,25 @@ def test_docker_images_returns_images(sandbox_env):
     assert result["images"][0]["tag"] == "python:3.12"
 
 
+def test_docker_image_history_requires_image_param(sandbox_env):
+    """dispatcher rejects missing 'image' param with a clear error."""
+    result = sandbox_env.dispatch("docker_image_history", {})
+    assert "Missing required params" in result["error"]
+    assert "image" in result["error"]
+
+
+def test_docker_image_history_dispatches_to_backend(sandbox_env):
+    sandbox_env._docker.history.return_value = {
+        "image": "python:3.12",
+        "layers": [],
+        "total_size_bytes": 0,
+        "layer_count": 0,
+    }
+    result = sandbox_env.dispatch("docker_image_history", {"image": "python:3.12"})
+    sandbox_env._docker.history.assert_called_once_with("python:3.12")
+    assert result["image"] == "python:3.12"
+
+
 def test_docker_ps_returns_managed_containers_only(sandbox_env):
     """The agent used to be able to enumerate every host container via
     ``name_prefix=""``.  The new ``docker_ps`` calls the backend's
@@ -374,6 +393,19 @@ def test_docker_inspect_dispatches_to_backend(sandbox_env):
     sandbox_env._machines.resolve_machine.assert_called_once_with("dev")
     backend.inspect.assert_called_once_with("dev", raw=False)
     assert result == {"id": "abc", "name": "dev"}
+
+
+def test_docker_inspect_kind_image_skips_machine_lookup(sandbox_env):
+    """kind='image' inspects the image ref directly, no managed-machine lookup."""
+    sandbox_env._docker.inspect.return_value = {"id": "abc", "tags": ["python:3.12"]}
+
+    result = sandbox_env.dispatch("docker_inspect", {"machine": "python:3.12", "kind": "image"})
+
+    # machine lookup is NOT performed for images — the agent passes the
+    # image ref directly, not a managed machine name.
+    sandbox_env._machines.resolve_machine.assert_not_called()
+    sandbox_env._docker.inspect.assert_called_once_with("python:3.12", kind="image", raw=False)
+    assert result == {"id": "abc", "tags": ["python:3.12"]}
 
 
 def test_docker_inspect_passes_raw_flag(sandbox_env):

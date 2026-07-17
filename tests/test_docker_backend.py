@@ -1020,7 +1020,82 @@ def test_docker_inspect_container_not_found(docker_backend, mock_client):
     assert "not here" in result["error"]
 
 
-# ---- logs() ----
+def test_docker_inspect_image_returns_curated_view(docker_backend, mock_client):
+    """kind='image' returns image identity + config (env KEYS only, no values)."""
+    image = mock_client.images.get.return_value
+    image.short_id = "abc123def456"
+    image.tags = ["python:3.12", "python:latest"]
+    image.attrs = {
+        "Created": "2024-01-15T10:00:00Z",
+        "Size": 123_456_789,
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Config": {
+            "Cmd": ["python"],
+            "Entrypoint": ["/usr/local/bin/python"],
+            "Env": [
+                "PATH=/usr/local/bin:/usr/bin",
+                "PYTHON_VERSION=3.12.0",
+                "LANG=C.UTF-8",
+            ],
+            "ExposedPorts": {"8080/tcp": {}, "9090/udp": {}},
+            "Volumes": {"/data": {}, "/logs": {}},
+            "Labels": {"maintainer": "psf"},
+            "WorkingDir": "/app",
+            "User": "nobody",
+        },
+    }
+
+    result = docker_backend.inspect("python:3.12", kind="image")
+
+    assert result["id"] == "abc123def456"
+    assert result["tags"] == ["python:3.12", "python:latest"]
+    assert result["size_bytes"] == 123_456_789
+    assert result["cmd"] == ["python"]
+    assert result["entrypoint"] == ["/usr/local/bin/python"]
+    # env_keys must contain NAMES only, never VALUES
+    assert "PATH" in result["env_keys"]
+    assert "PYTHON_VERSION" in result["env_keys"]
+    assert "/usr/local/bin" not in str(result["env_keys"])
+    assert "3.12.0" not in str(result["env_keys"])
+    assert result["exposed_ports"] == ["8080/tcp", "9090/udp"]
+    assert result["volumes"] == ["/data", "/logs"]
+    assert result["working_dir"] == "/app"
+    assert result["user"] == "nobody"
+    mock_client.images.get.assert_called_once_with("python:3.12")
+
+
+def test_docker_inspect_image_raw_returns_full_attrs(docker_backend, mock_client):
+    """kind='image' with raw=True returns the full image attrs dict."""
+    image = mock_client.images.get.return_value
+    image.attrs = {"Id": "sha256:abc", "Config": {"Env": ["SECRET=real-value"]}}
+
+    result = docker_backend.inspect("img", kind="image", raw=True)
+
+    assert result == image.attrs
+    mock_client.images.get.assert_called_once_with("img")
+
+
+def test_docker_inspect_image_not_found(docker_backend, mock_client):
+    """kind='image' with unknown image returns error dict (not raise)."""
+    from docker.errors import ImageNotFound
+
+    mock_client.images.get.side_effect = ImageNotFound("nope")
+
+    result = docker_backend.inspect("ghost", kind="image")
+
+    assert result["status"] == "error"
+    assert "nope" in result["error"]
+
+
+def test_docker_inspect_unknown_kind_rejected(docker_backend):
+    """kind must be 'container' or 'image'; anything else returns error."""
+    result = docker_backend.inspect("anything", kind="volume")
+    assert result["status"] == "error"
+    assert "unknown inspect kind" in result["error"]
+
+
+# ---- history() ----
 
 
 def test_docker_logs_default_tail_200(docker_backend, mock_client):
@@ -1277,3 +1352,63 @@ def test_docker_restart_error_says_after_restart_not_after_start(docker_backend,
     assert info.status == "error"
     assert "after restart" in info.error
     assert "after start" not in info.error
+
+
+def test_docker_history_returns_layers(docker_backend, mock_client):
+    """history() returns structured layer info from docker SDK history()."""
+    image = mock_client.images.get.return_value
+    image.history.return_value = [
+        {
+            "Id": "sha256:aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa111aaa1",
+            "Created": 1700000000,
+            "CreatedBy": "/bin/sh -c apt-get install -y python",
+            "Size": 50_000_000,
+            "Tags": ["python:3.12"],
+        },
+        {
+            "Id": "sha256:bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb222bbb2",
+            "Created": 1699999000,
+            "CreatedBy": "COPY ./app /app  # buildkit",
+            "Size": 5_000_000,
+            "Tags": [],
+        },
+    ]
+
+    result = docker_backend.history("python:3.12")
+
+    assert result["image"] == "python:3.12"
+    assert result["layer_count"] == 2
+    assert result["total_size_bytes"] == 55_000_000
+    assert len(result["layers"]) == 2
+    # IDs are 12-char prefixes, NOT full shas (avoids token bloat)
+    assert result["layers"][0]["id"] == "aaa111aaa111"
+    assert result["layers"][0]["created_by"] == "/bin/sh -c apt-get install -y python"
+    assert result["layers"][1]["tags"] == []
+    mock_client.images.get.assert_called_once_with("python:3.12")
+
+
+def test_docker_history_image_not_found(docker_backend, mock_client):
+    """history() with unknown image returns error dict."""
+    from docker.errors import ImageNotFound
+
+    mock_client.images.get.side_effect = ImageNotFound("nope")
+
+    result = docker_backend.history("ghost:latest")
+
+    assert result["status"] == "error"
+    assert "nope" in result["error"]
+
+
+def test_docker_build_wraps_typeerror(docker_backend, mock_client):
+    """Docker SDK raises TypeError when path is not a directory; surface a hint."""
+    mock_client.images.build.side_effect = TypeError(
+        "You must specify a directory to build in path"
+    )
+
+    result = docker_backend.build("img:latest", machine="dev", dockerfile="/workspace/Dockerfile")
+
+    assert result["status"] == "error"
+    # The error must point to context_dir / dockerfile as the likely cause,
+    # not just echo the opaque SDK message.
+    assert "context_dir" in result["error"]
+    assert "/workspace/Dockerfile" in result["error"]

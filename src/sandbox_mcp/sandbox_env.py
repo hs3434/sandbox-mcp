@@ -179,6 +179,30 @@ DOCKER_HELP_RESPONSE = {
             ],
         },
         {
+            "action": "docker_image_history",
+            "description": (
+                "Layer-by-layer build history for a single image "
+                "(mirrors ``docker history <image>``).  Use this when you "
+                "need to inspect one specific image's provenance; use "
+                "docker_images when you need to enumerate multiple images."
+            ),
+            "required": {"image": "string — name:tag, short id, or full id"},
+            "returns": {
+                "image": "string",
+                "layers": [
+                    {
+                        "id": "string (12-char prefix)",
+                        "created": "number (epoch seconds)",
+                        "created_by": "string (Dockerfile instruction)",
+                        "size_bytes": "number",
+                        "tags": "list[string]",
+                    }
+                ],
+                "total_size_bytes": "number",
+                "layer_count": "number",
+            },
+        },
+        {
             "action": "docker_build",
             "description": (
                 "Build a Docker image from a Dockerfile already written "
@@ -215,7 +239,14 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_start",
-            "description": "Start a stopped container.",
+            "description": (
+                "Start a stopped container.  Verification is a single "
+                "post-start state reload — not polling, no timeout, no "
+                "interval.  Catches fast crashes (CMD exits within "
+                "milliseconds); may report 'running' for containers that "
+                "die a moment later.  For robust liveness checks, "
+                "subsequent calls to docker_inspect with a delay."
+            ),
             "required": {"machine": "string"},
             "returns": {"machine": "string", "status": "running"},
         },
@@ -228,15 +259,27 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_inspect",
             "description": (
-                "Curated container config: state, image, cmd, entrypoint, "
-                "mounts (source host path -> bind -> mode), labels, restart "
+                "Curated config for a container (kind='container', default) "
+                "or image (kind='image'). "
+                "Container view: state, image, cmd, entrypoint, mounts "
+                "(source host path -> bind -> mode), labels, restart "
                 "policy.  Deliberately omits Env/working_dir/user/network "
                 "(use shell_exec env/pwd/whoami/hostname -i for those). "
+                "Image view: identity, tags, size, cmd/entrypoint, env "
+                "KEYS ONLY (values redacted — use shell_exec for runtime env), "
+                "exposed ports, declared volumes, labels, working_dir, user. "
                 "Pass raw=true to get the full attrs dict (incl. Env values, "
                 "NetworkSettings, HostConfig)."
             ),
             "required": {"machine": "string"},
-            "optional": {"raw": "bool — default false"},
+            "optional": {
+                "kind": (
+                    "'container' (default) or 'image'.  Container inspect "
+                    "needs a managed machine name; image inspect takes any "
+                    "image ref (name:tag, short id, or full id)."
+                ),
+                "raw": "bool — default false",
+            },
             "returns": {
                 "id": "string",
                 "name": "string",
@@ -300,10 +343,12 @@ DOCKER_HELP_RESPONSE = {
         {
             "action": "docker_restart",
             "description": (
-                "Atomic restart (stop then start) with the same post-check "
-                "as docker_start: a container whose CMD crashes is reported "
-                "as 'error' with a diagnostic tail, not 'running'.  For a "
-                "stopped container this is equivalent to docker_start."
+                "Atomic restart (stop then start) with the same "
+                "post-check as docker_start: single post-restart state "
+                "reload, not polling.  Catches fast crashes (CMD exits "
+                "within milliseconds); may report 'running' for "
+                "containers that die a moment later.  For a stopped "
+                "container this is equivalent to docker_start."
             ),
             "required": {"machine": "string"},
             "optional": {"timeout": "int — default 10 (seconds for stop phase)"},
@@ -635,9 +680,23 @@ class SandboxEnv:
     def _op_docker_images(self, params):
         return {"images": self._docker.list_images()}
 
+    def _op_docker_image_history(self, params):
+        err = self._require(params, "image")
+        if err is not None:
+            return {"error": err}
+        return self._docker.history(params["image"])
+
     # ---- docker introspection ----
 
     def _op_docker_inspect(self, params):
+        kind = params.get("kind", "container")
+        if kind == "image":
+            err = self._require(params, "machine")
+            if err is not None:
+                return {"error": err}
+            return self._docker.inspect(
+                params["machine"], kind="image", raw=bool(params.get("raw", False))
+            )
         resolved = self._resolve_docker_machine(params, "docker_inspect")
         if isinstance(resolved, dict):
             return resolved

@@ -66,6 +66,81 @@ def _container_to_host(container_path: str, machine: str) -> Path:
     return target
 
 
+def _curated_container_view(container, name: str) -> dict:
+    """Build the curated container view returned by :meth:`inspect`.
+
+    Kept module-level so the public method stays a thin wrapper around
+    a pure function — easier to test and to keep the response schema
+    in one place.
+    """
+    attrs = container.attrs or {}
+    state = attrs.get("State") or {}
+    config = attrs.get("Config") or {}
+    host_cfg = attrs.get("HostConfig") or {}
+    restart = host_cfg.get("RestartPolicy") or {}
+    health = state.get("Health") or {}
+
+    return {
+        "id": container.short_id,
+        "name": name,
+        "image": config.get("Image", ""),
+        "created": attrs.get("Created", ""),
+        "started_at": state.get("StartedAt", ""),
+        "finished_at": state.get("FinishedAt", ""),
+        "state": {
+            "status": state.get("Status", "unknown"),
+            "running": bool(state.get("Running", False)),
+            "exit_code": state.get("ExitCode", 0),
+            "error": state.get("Error", "") or "",
+            "restart_count": state.get("RestartCount", 0),
+            "health": health.get("Status", "") or "",
+        },
+        "cmd": list(config.get("Cmd") or []) or None,
+        "entrypoint": list(config.get("Entrypoint") or []) or None,
+        "mounts": [
+            {
+                "source": m.get("Source", ""),
+                "destination": m.get("Destination", ""),
+                "mode": m.get("Mode", ""),
+            }
+            for m in (attrs.get("Mounts") or [])
+        ],
+        "labels": dict(config.get("Labels") or {}),
+        "restart_policy": {
+            "name": restart.get("Name", ""),
+            "max_retry": restart.get("MaximumRetryCount", 0),
+        },
+    }
+
+
+def _curated_image_view(image) -> dict:
+    """Build the curated image view returned by :meth:`inspect`.
+
+    Exposes identity + build-time config.  Env values are redacted to
+    keys only (agents should use ``shell_exec`` for runtime env).  Volume
+    definitions are kept because they're part of the image contract.
+    """
+    attrs = image.attrs or {}
+    config = attrs.get("Config") or {}
+
+    return {
+        "id": image.short_id,
+        "tags": list(image.tags) if image.tags else [],
+        "created": attrs.get("Created", ""),
+        "size_bytes": attrs.get("Size", 0),
+        "architecture": attrs.get("Architecture", ""),
+        "os": attrs.get("Os", ""),
+        "cmd": list(config.get("Cmd") or []) or None,
+        "entrypoint": list(config.get("Entrypoint") or []) or None,
+        "env_keys": sorted(k.split("=", 1)[0] for k in (config.get("Env") or []) if "=" in k),
+        "exposed_ports": sorted((config.get("ExposedPorts") or {}).keys()),
+        "volumes": sorted((config.get("Volumes") or {}).keys()),
+        "labels": dict(config.get("Labels") or {}),
+        "working_dir": config.get("WorkingDir", "") or None,
+        "user": config.get("User", "") or None,
+    }
+
+
 def _build_share_bindings(name: str) -> dict:
     """Build bind mounts for the inter-container share dir.
 
@@ -521,11 +596,20 @@ class DockerBackend(Backend):
         "running" would mislead the agent into shelling into a dead
         container.
 
-        This reloads the container's attrs and inspects ``State``: if
-        running, returns a ``running`` info (carrying ``note``);
-        otherwise returns an ``error`` info with a diagnostic (status,
-        exit code, and a short tail of the container's logs) so the
-        operator can see *why* it won't run.
+        **Verification model**: a single ``container.reload()`` immediately
+        after ``start()`` returns, then a single read of ``State.Status``.
+        This is **not** polling — there is no wait, no interval, no max
+        timeout.  If the process's crash window (start-accepted →
+        process-exit) is shorter than the reload round-trip, the check
+        catches it; if the process takes longer to die (e.g. runs a
+        short-lived init script, then exits 200ms in), this reports
+        "running" for a container that will shortly transition to
+        "exited".  Callers needing a more robust check should poll
+        ``docker_inspect`` themselves with an appropriate delay.
+
+        Returns a ``running`` info (carrying ``note``) on success, or an
+        ``error`` info with a diagnostic (status, exit code, short log
+        tail) if the container is not running.
         """
         docker_errors = _docker_module().errors
         # attrs may be stale if reload fails; inspect whatever we have.
@@ -649,62 +733,48 @@ class DockerBackend(Backend):
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
 
-    def inspect(self, name: str, raw: bool = False) -> dict:
-        """Return curated container config, or full ``attrs`` when ``raw=True``.
+    def inspect(self, name: str, *, kind: str = "container", raw: bool = False) -> dict:
+        """Return curated config for a container or image, or full ``attrs`` when ``raw=True``.
 
-        Curated view deliberately omits ``Config.Env``, ``Config.WorkingDir``,
-        ``Config.User``, and ``NetworkSettings.IPAddress`` — agents get
-        those from :func:`sandbox_shell_exec` (``env`` / ``pwd`` / ``whoami``
-        / ``hostname -i``).  The curated set focuses on what ``shell_exec``
+        ``kind`` selects the object type (``"container"`` or ``"image"``).
+        Defaults to container for backward compatibility — image inspection
+        is opt-in to keep existing callers' results stable.
+
+        Container curated view deliberately omits ``Config.Env``,
+        ``Config.WorkingDir``, ``Config.User``, and
+        ``NetworkSettings.IPAddress`` — agents get those from
+        :func:`sandbox_shell_exec` (``env`` / ``pwd`` / ``whoami`` /
+        ``hostname -i``).  The curated set focuses on what ``shell_exec``
         cannot answer: state, cmd, mounts, labels, restart policy.
+
+        Image view returns identity + config (cmd, entrypoint, env-keys
+        only — values redacted, expose ports, mounted volumes).
         """
+        if kind not in ("container", "image"):
+            return {
+                "error": f"unknown inspect kind: {kind!r} (use 'container' or 'image')",
+                "status": "error",
+            }
         docker = _docker_module()
         try:
-            container = self._ensure_client().containers.get(name)
-            container.reload()
-        except (docker.errors.NotFound, docker.errors.APIError) as e:
+            if kind == "container":
+                obj = self._ensure_client().containers.get(name)
+                obj.reload()
+            else:
+                obj = self._ensure_client().images.get(name)
+        except (
+            docker.errors.NotFound,
+            docker.errors.ImageNotFound,
+            docker.errors.APIError,
+        ) as e:
             return {"error": str(e.explanation or e), "status": "error"}
 
         if raw:
-            return container.attrs
+            return obj.attrs
 
-        state = container.attrs.get("State") or {}
-        config = container.attrs.get("Config") or {}
-        host_cfg = container.attrs.get("HostConfig") or {}
-        restart = host_cfg.get("RestartPolicy") or {}
-        health = state.get("Health") or {}
-
-        return {
-            "id": container.short_id,
-            "name": name,
-            "image": config.get("Image", ""),
-            "created": container.attrs.get("Created", ""),
-            "started_at": state.get("StartedAt", ""),
-            "finished_at": state.get("FinishedAt", ""),
-            "state": {
-                "status": state.get("Status", "unknown"),
-                "running": bool(state.get("Running", False)),
-                "exit_code": state.get("ExitCode", 0),
-                "error": state.get("Error", "") or "",
-                "restart_count": state.get("RestartCount", 0),
-                "health": health.get("Status", "") or "",
-            },
-            "cmd": list(config.get("Cmd") or []) or None,
-            "entrypoint": list(config.get("Entrypoint") or []) or None,
-            "mounts": [
-                {
-                    "source": m.get("Source", ""),
-                    "destination": m.get("Destination", ""),
-                    "mode": m.get("Mode", ""),
-                }
-                for m in (container.attrs.get("Mounts") or [])
-            ],
-            "labels": dict(config.get("Labels") or {}),
-            "restart_policy": {
-                "name": restart.get("Name", ""),
-                "max_retry": restart.get("MaximumRetryCount", 0),
-            },
-        }
+        if kind == "container":
+            return _curated_container_view(obj, name)
+        return _curated_image_view(obj)
 
     def logs(
         self,
@@ -784,6 +854,44 @@ class DockerBackend(Backend):
         return {
             "changes": {"A": added, "C": changed, "D": deleted},
             "summary": {"added": len(added), "changed": len(changed), "deleted": len(deleted)},
+        }
+
+    def history(self, image: str) -> dict:
+        """Layer-by-layer build history for a single image.
+
+        Returns one entry per layer (oldest first), each with id (12-char
+        prefix), created (epoch seconds), created_by (the Dockerfile RUN /
+        COPY / etc. line), size in bytes, and tags.  Mirrors
+        ``docker history <image>`` but as structured data.
+        """
+        docker = _docker_module()
+        try:
+            img = self._ensure_client().images.get(image)
+            raw = img.history()
+        except (
+            docker.errors.ImageNotFound,
+            docker.errors.NotFound,
+            docker.errors.APIError,
+        ) as e:
+            return {"error": str(e.explanation or e), "status": "error"}
+
+        layers = [
+            {
+                # Strip "sha256:" prefix; keep 12 hex chars (matches
+                # ``docker.short_id`` and keeps the response token-friendly).
+                "id": (entry.get("Id") or "").removeprefix("sha256:")[:12],
+                "created": entry.get("Created", 0),
+                "created_by": (entry.get("CreatedBy") or "").strip(),
+                "size_bytes": entry.get("Size", 0),
+                "tags": list(entry.get("Tags") or []),
+            }
+            for entry in (raw or [])
+        ]
+        return {
+            "image": image,
+            "layers": layers,
+            "total_size_bytes": sum(layer["size_bytes"] for layer in layers),
+            "layer_count": len(layers),
         }
 
     def stats(self, name: str) -> dict:
@@ -940,6 +1048,23 @@ class DockerBackend(Backend):
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
+        except TypeError as e:
+            # docker SDK raises TypeError when ``path`` is not a directory
+            # (the SDK's own internal check).  Wrap with a hint pointing
+            # to the most likely cause — context_dir resolves to a host
+            # path that doesn't exist or isn't a directory.
+            return {
+                "error": (
+                    f"docker build context error: {e}.  The agent-written "
+                    "Dockerfile is mapped from /workspace/ on the container "
+                    "to work_home/<machine>/ on the host — check that "
+                    f"context_dir ({context_dir!r}) and dockerfile "
+                    f"({dockerfile!r}) were actually written via "
+                    "sandbox_file_write before calling docker_build."
+                ),
+                "image_tag": image_tag,
+                "status": "error",
+            }
 
     # ---- discovery (direct daemon queries, no MachineRegistry) ----
 
