@@ -44,6 +44,7 @@ class SSHBackend(Backend):
     def __init__(self):
         self._ssh = _find_ssh()
         self._targets: dict[str, dict] = {}
+        self._shell: dict[str, str] = {}
 
     def _socket_path(self, name):
         target = self._targets.get(name)
@@ -125,6 +126,7 @@ class SSHBackend(Backend):
             "purpose": purpose,
             "started_at": time.time(),
         }
+        self._shell[name] = kwargs.get("shell", "bash")
         return TargetInfo(name=name, backend="ssh", status="running", purpose=purpose)
 
     def start(self, name):
@@ -173,7 +175,7 @@ class SSHBackend(Backend):
             if socket_dir:
                 with contextlib.suppress(Exception):
                     shutil.rmtree(socket_dir, ignore_errors=True)
-        return {"target": name, "status": "removed"}
+        return {"machine": name, "status": "removed"}
 
     def get_info(self, name):
         target = self._targets.get(name)
@@ -194,12 +196,12 @@ class SSHBackend(Backend):
         )
 
     def open_shell(self, name):
-        return ShellSession([*self._ssh_base_args(name), "bash"])
+        return ShellSession([*self._ssh_base_args(name), self._shell.get(name, "bash")])
 
     def exec_oneoff(self, name, command, timeout=30):
         try:
             result = subprocess.run(
-                [*self._ssh_base_args(name), "bash", "-c", command],
+                [*self._ssh_base_args(name), self._shell.get(name, "bash"), "-c", command],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -245,7 +247,7 @@ class SSHBackend(Backend):
         )
         try:
             result = subprocess.run(
-                [*self._ssh_base_args(name), "bash", "-c", script],
+                [*self._ssh_base_args(name), self._shell.get(name, "bash"), "-c", script],
                 input=content,
                 capture_output=True,
                 timeout=60,

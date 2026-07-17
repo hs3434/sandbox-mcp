@@ -95,10 +95,6 @@ class TargetRegistry:
     def list_machines(self) -> list[str]:
         return list(self._machines.keys())
 
-    # Backward-compatible alias; the rest of the codebase still calls
-    # `list_targets()` and `resolve_target()` in a few places.
-    list_targets = list_machines
-
     def get_info(self, name: str) -> TargetInfo:
         return self._machines[name]["info"]
 
@@ -129,6 +125,3 @@ class TargetRegistry:
         if name not in self._machines:
             raise ValueError(f"Unknown machine: {name}")
         return name
-
-    # Backward-compatible alias.
-    resolve_target = resolve_machine

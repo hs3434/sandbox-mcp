@@ -85,18 +85,6 @@ def test_unregister_machine():
     assert reg.get_default() is None
 
 
-def test_resolve_target_alias_still_works():
-    """Legacy alias kept for backward compatibility."""
-    reg = TargetRegistry()
-    backend = MagicMock()
-    backend.create.return_value = MagicMock(
-        name="dev", backend="docker", status="running", purpose="", shells=0, uptime=""
-    )
-    reg.register("dev", backend, purpose="", image="python:3.12")
-    assert reg.resolve_target(None) == "dev"
-    assert reg.list_targets() == ["dev"]
-
-
 def test_adopt_does_not_call_backend_create():
     """``adopt`` is for reconciling containers that already exist on the
     daemon (e.g. after server restart).  It must NOT call

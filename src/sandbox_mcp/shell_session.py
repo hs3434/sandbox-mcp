@@ -65,7 +65,6 @@ class ShellSession:
         self._state = "idle"
         self._last_command = None
         self._started_at = time.time()
-        self._purpose = None
 
         # Drain thread buffer
         self._head = bytearray()
@@ -327,11 +326,3 @@ class ShellSession:
     @property
     def uptime(self):
         return time.time() - self._started_at
-
-    @property
-    def purpose(self):
-        return self._purpose
-
-    @purpose.setter
-    def purpose(self, value):
-        self._purpose = value

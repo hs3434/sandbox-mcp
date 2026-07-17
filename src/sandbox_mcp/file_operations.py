@@ -66,35 +66,6 @@ def _files_cfg():
 _FAIL_CLOSED_INPROC_EXTS = frozenset({".json", ".yaml", ".yml", ".toml"})
 
 
-def _expand_path(path: str, backend) -> str:
-    """Expand ``~`` and ``~user`` before quoting for the shell.
-
-    Single-quoted paths in bash don't expand ``~`` so we resolve on the
-    host before sending. ``~user`` is expanded only when ``user``
-    matches a safe character class (no shell injection via ``~$(rm)``).
-    """
-    if not path or "~" not in path:
-        return path
-    # Use the backend's echo to resolve $HOME / ~user.
-    r = backend.exec_oneoff("_resolve_path", "echo $HOME")
-    home = (r.get("output") or "").strip()
-    if path == "~":
-        return home
-    if path.startswith("~/") and home:
-        return home + path[1:]
-    if path.startswith("~"):
-        rest = path[1:]
-        slash = rest.find("/")
-        username = rest[:slash] if slash >= 0 else rest
-        if username and re.fullmatch(r"[a-zA-Z0-9._-]+", username):
-            r2 = backend.exec_oneoff("_resolve_path", f"echo ~{username}")
-            user_home = (r2.get("output") or "").strip()
-            if user_home and user_home != f"~{username}":
-                suffix = path[1 + len(username) :]
-                return user_home + suffix
-    return path
-
-
 def _detect_line_ending(text: str) -> str:
     """Return the dominant line ending in ``text``: ``\\r\\n`` or ``\\n``."""
     return "\r\n" if "\r\n" in text else "\n"
@@ -304,7 +275,6 @@ class FileOperations:
     # ---- read ----
 
     def read(self, path: str, machine: str, offset: int = 1, limit: int | None = None) -> dict:
-        path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
         cfg = _files_cfg()
         offset = max(1, int(offset))
@@ -419,7 +389,6 @@ class FileOperations:
     # ---- write ----
 
     def write(self, path: str, content: str, machine: str) -> dict:
-        path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
         ext = os.path.splitext(path)[1].lower()
 
@@ -533,7 +502,6 @@ class FileOperations:
     def _patch_replace(
         self, machine: str, path: str, old_string: str, new_string: str, replace_all: bool
     ) -> dict:
-        path = _expand_path(path, self._backend)
         advisory = check_path_safety(path)
         result = self._backend.exec_oneoff(machine, f"cat {shlex.quote(path)}")
         if result.get("exit_code") not in (0, None):
@@ -625,7 +593,6 @@ class FileOperations:
         if search_type not in ("content", "files"):
             return {"status": "error", "error": f"Unknown search_type: {search_type}"}
 
-        path = _expand_path(path, self._backend)
         offset = max(0, int(offset))
         limit = max(1, int(limit))
 

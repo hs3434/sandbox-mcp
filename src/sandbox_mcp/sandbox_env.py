@@ -27,6 +27,10 @@ import logging
 import time
 from typing import Any
 
+from sandbox_mcp.backends.base import TargetInfo
+from sandbox_mcp.backends.docker_backend import DockerBackend
+from sandbox_mcp.backends.ssh_backend import SSHBackend
+
 logger = logging.getLogger(__name__)
 
 HELP_RESPONSE = {
@@ -135,6 +139,14 @@ DOCKER_HELP_RESPONSE = {
                 "explicitly."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
+            "optional": {
+                "shell": (
+                    "Shell binary used for ``docker exec`` into this machine "
+                    "(default ``bash``). Set to e.g. ``/bin/sh`` for alpine/"
+                    "distroless images. Affects interactive shells AND "
+                    "one-off command execution (file ops, healthchecks)."
+                ),
+            },
             "returns": {"name": "string", "status": "running", "backend": "docker"},
             "example": {"name": "dev", "image": "python:3.12", "purpose": "Python dev"},
         },
@@ -225,13 +237,20 @@ DOCKER_HELP_RESPONSE = {
             ),
             "required": {"machine": "string"},
             "optional": {"raw": "bool — default false"},
-            "returns": {"id": "string", "name": "string", "image": "string",
-                        "created": "string (ISO 8601)",
-                        "started_at": "string (ISO 8601)",
-                        "finished_at": "string (ISO 8601)",
-                        "state": "object", "cmd": "list|null",
-                        "entrypoint": "list|null", "mounts": "list",
-                        "labels": "object", "restart_policy": "object"},
+            "returns": {
+                "id": "string",
+                "name": "string",
+                "image": "string",
+                "created": "string (ISO 8601)",
+                "started_at": "string (ISO 8601)",
+                "finished_at": "string (ISO 8601)",
+                "state": "object",
+                "cmd": "list|null",
+                "entrypoint": "list|null",
+                "mounts": "list",
+                "labels": "object",
+                "restart_policy": "object",
+            },
         },
         {
             "action": "docker_logs",
@@ -267,13 +286,16 @@ DOCKER_HELP_RESPONSE = {
             "description": (
                 "One-shot resource snapshot: cpu_percent, memory usage/limit, "
                 "network rx/tx (aggregated across all interfaces), block IO "
-                "read/write.  Streaming is rejected (MCP tool-call model "
-                "is request/response; call again for the next snapshot)."
+                "read/write.  For live monitoring the agent loops on repeated "
+                "docker_stats calls (MCP is request/response)."
             ),
             "required": {"machine": "string"},
-            "optional": {"stream": "bool — default false; rejected if true"},
-            "returns": {"cpu_percent": "number", "memory": "object",
-                        "network": "object", "block_io": "object"},
+            "returns": {
+                "cpu_percent": "number",
+                "memory": "object",
+                "network": "object",
+                "block_io": "object",
+            },
         },
         {
             "action": "docker_restart",
@@ -285,8 +307,11 @@ DOCKER_HELP_RESPONSE = {
             ),
             "required": {"machine": "string"},
             "optional": {"timeout": "int — default 10 (seconds for stop phase)"},
-            "returns": {"machine": "string", "status": "running|error",
-                        "error": "string (on failure)"},
+            "returns": {
+                "machine": "string",
+                "status": "running|error",
+                "error": "string (on failure)",
+            },
         },
     ]
 }
@@ -405,6 +430,31 @@ class SandboxEnv:
             return f"Missing required params: {', '.join(missing)}"
         return None
 
+    def _resolve_docker_machine(self, params, action: str) -> tuple[str, DockerBackend] | dict:
+        """Resolve a Docker machine from params; return ``(machine, backend)``
+        or a ready-to-return ``{"error": ...}`` dict on any failure
+        (missing key, unknown machine, wrong backend type).
+        """
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        if not isinstance(backend, DockerBackend):
+            return {"error": f"{action} only supported on Docker machines"}
+        return machine, backend
+
+    def _resolve_ssh_machine(self, params, action: str) -> tuple[str, SSHBackend] | dict:
+        """SSH counterpart of :meth:`_resolve_docker_machine`."""
+        err = self._require(params, "machine")
+        if err is not None:
+            return {"error": err}
+        machine = self._machines.resolve_machine(params["machine"])
+        backend = self._machines.get_backend(machine)
+        if not isinstance(backend, SSHBackend):
+            return {"error": f"{action} only supported on SSH machines"}
+        return machine, backend
+
     def _op_default_set(self, params):
         has_machine = "machine" in params
         has_shell = "shell_id" in params
@@ -443,11 +493,14 @@ class SandboxEnv:
         err = self._require(params, "name", "image", "purpose")
         if err is not None:
             return {"error": err}
+        kwargs = {"image": params["image"]}
+        if "shell" in params:
+            kwargs["shell"] = params["shell"]
         info = self._machines.register(
             params["name"],
             self._docker,
             purpose=params.get("purpose", ""),
-            image=params["image"],
+            **kwargs,
         )
         # Surface status plus any diagnostic (error) and non-fatal hint
         # (note, e.g. "reattached to existing container").  Without this
@@ -495,54 +548,37 @@ class SandboxEnv:
         concurrent ``dev`` machines both committing to the same default
         tag).
         """
-        err = self._require(params, "machine", "image_tag")
+        err = self._require(params, "image_tag")
         if err is not None:
             return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_commit only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_commit")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         return backend.commit(machine, params["image_tag"])
 
     def _op_docker_stop(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_stop only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_stop")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         self._shells.close_all_for_machine(machine)
         info = backend.stop(machine)
         return {"machine": machine, "status": info.status}
 
     def _op_docker_start(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_start only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_start")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         info = backend.start(machine)
         return {"machine": machine, "status": info.status}
 
     def _op_docker_remove(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_remove only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_remove")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         self._shells.close_all_for_machine(machine)
         result = backend.remove(machine)
         self._machines.unregister(machine)
@@ -562,8 +598,6 @@ class SandboxEnv:
         calls it once at startup (in ``SandboxServer.__init__``) to
         populate the registry.
         """
-        from sandbox_mcp.backends.base import TargetInfo
-
         managed = self._docker.list_managed_containers()
         containers = []
         for machine, attrs in managed:
@@ -604,27 +638,17 @@ class SandboxEnv:
     # ---- docker introspection ----
 
     def _op_docker_inspect(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_inspect only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_inspect")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         return backend.inspect(machine, raw=bool(params.get("raw", False)))
 
     def _op_docker_logs(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_logs only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_logs")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         return backend.logs(
             machine,
             tail=int(params.get("tail", 200)),
@@ -634,39 +658,24 @@ class SandboxEnv:
         )
 
     def _op_docker_diff(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_diff only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_diff")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         return backend.diff(machine)
 
     def _op_docker_stats(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_stats only supported on Docker machines"}
-        return backend.stats(machine, stream=bool(params.get("stream", False)))
+        resolved = self._resolve_docker_machine(params, "docker_stats")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
+        return backend.stats(machine)
 
     def _op_docker_restart(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.docker_backend import DockerBackend
-
-        if not isinstance(backend, DockerBackend):
-            return {"error": "docker_restart only supported on Docker machines"}
+        resolved = self._resolve_docker_machine(params, "docker_restart")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         info = backend.restart(machine, timeout=int(params.get("timeout", 10)))
         result = {"machine": machine, "status": info.status}
         if info.error:
@@ -687,46 +696,32 @@ class SandboxEnv:
             user=params["user"],
             port=params.get("port", 22),
             key=params.get("key"),
+            shell=params.get("shell", "bash"),
         )
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 
     def _op_ssh_disconnect(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.ssh_backend import SSHBackend
-
-        if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_disconnect only supported on SSH machines"}
+        resolved = self._resolve_ssh_machine(params, "ssh_disconnect")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         self._shells.close_all_for_machine(machine)
         info = backend.stop(machine)
         return {"machine": machine, "status": info.status}
 
     def _op_ssh_reconnect(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.ssh_backend import SSHBackend
-
-        if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_reconnect only supported on SSH machines"}
+        resolved = self._resolve_ssh_machine(params, "ssh_reconnect")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         info = backend.start(machine)
         return {"machine": machine, "status": info.status}
 
     def _op_ssh_remove(self, params):
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        from sandbox_mcp.backends.ssh_backend import SSHBackend
-
-        if not isinstance(backend, SSHBackend):
-            return {"error": "ssh_remove only supported on SSH machines"}
+        resolved = self._resolve_ssh_machine(params, "ssh_remove")
+        if isinstance(resolved, dict):
+            return resolved
+        machine, backend = resolved
         self._shells.close_all_for_machine(machine)
         result = backend.remove(machine)
         self._machines.unregister(machine)

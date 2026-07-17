@@ -337,36 +337,3 @@ def test_search_separates_rg_diagnostics(fops, backend):
 def test_search_rejects_unknown_search_type(fops, backend):
     result = fops.search("foo", machine="dev", search_type="bogus")
     assert result["status"] == "error"
-
-
-# ---- expand_path ----
-
-
-def test_expand_tilde_uses_backend_home(fops, backend):
-    from sandbox_mcp.file_operations import _expand_path
-
-    backend.exec_oneoff.return_value = {
-        "exit_code": 0,
-        "output": "/home/dev\n",
-        "stderr": "",
-    }
-    assert _expand_path("~/x.txt", backend) == "/home/dev/x.txt"
-    assert _expand_path("~", backend) == "/home/dev"
-
-
-def test_expand_path_passthrough_when_no_tilde(fops):
-    from sandbox_mcp.file_operations import _expand_path
-
-    assert _expand_path("/tmp/x", fops._backend) == "/tmp/x"
-    assert _expand_path("relative", fops._backend) == "relative"
-
-
-def test_expand_path_lone_tilde(fops):
-    from sandbox_mcp.file_operations import _expand_path
-
-    fops._backend.exec_oneoff.return_value = {
-        "exit_code": 0,
-        "output": "/home/dev\n",
-        "stderr": "",
-    }
-    assert _expand_path("~", fops._backend) == "/home/dev"

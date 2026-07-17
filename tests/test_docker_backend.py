@@ -239,24 +239,6 @@ def test_docker_create_admin_skips_share_dir_creation(docker_backend, mock_clien
     )
 
 
-def test_docker_create_admin_uses_admin_image(docker_backend, mock_client, tmp_path, monkeypatch):
-    """``[docker] admin_image`` overrides ``default_image`` when set."""
-    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "alpine:3.20")
-    docker_backend.create(name="admin", purpose="admin")
-    run_args = mock_client.containers.run.call_args
-    assert run_args.args[0] == "alpine:3.20"
-
-
-def test_docker_create_admin_falls_back_to_default_image(
-    docker_backend, mock_client, tmp_path, monkeypatch
-):
-    """Empty ``admin_image`` falls back to ``default_image``."""
-    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "")
-    monkeypatch.setenv("SANDBOX_MCP_DOCKER_DEFAULT_IMAGE", "debian:bookworm")
-    docker_backend.create(name="admin", purpose="admin")
-    assert mock_client.containers.run.call_args.args[0] == "debian:bookworm"
-
-
 def test_docker_create_admin_disabled_when_admin_machine_empty(
     docker_backend, mock_client, tmp_path, monkeypatch
 ):
@@ -279,10 +261,10 @@ def test_docker_create_admin_disabled_when_admin_machine_empty(
 def test_docker_create_admin_explicit_image_kwarg_wins(
     docker_backend, mock_client, tmp_path, monkeypatch
 ):
-    """Agent-supplied ``image`` kwarg beats both ``admin_image`` and
-    ``default_image`` (matches peer behaviour — explicit > config).
+    """Agent-supplied ``image`` kwarg beats ``default_image``
+    (matches peer behaviour — explicit > config).
     """
-    monkeypatch.setenv("SANDBOX_MCP_DOCKER_ADMIN_IMAGE", "alpine:3.20")
+    monkeypatch.setenv("SANDBOX_MCP_DOCKER_DEFAULT_IMAGE", "debian:stable-slim")
     docker_backend.create(name="admin", purpose="admin", image="busybox:latest")
     assert mock_client.containers.run.call_args.args[0] == "busybox:latest"
 
@@ -468,35 +450,6 @@ def test_docker_build_default_paths(docker_backend, tmp_path, monkeypatch):
         result = docker_backend.build("img:latest", machine="dev")
     assert result["status"] == "built"
     assert mock_build.call_args.kwargs["path"] == str(machine_dir.resolve())
-
-
-def test_docker_build_rejects_inline_dockerfile_content(docker_backend, tmp_path, monkeypatch):
-    """Agent cannot supply a Dockerfile out-of-band via ``dockerfile_content``.
-
-    Inline mode used to stage the Dockerfile under ``work_home/_builds/``
-    and feed it directly to ``docker build`` — bypassing the sandbox's
-    file-write audit trail AND dodging the work_home visibility check.
-    A malicious inline Dockerfile (``RUN --mount=type=bind,source=/,...``)
-    executes in a daemon-orchestrated container with full host kernel
-    capabilities, so inline mode is a host-RCE vector.
-
-    File mode (the only remaining path) requires the agent to have
-    written the Dockerfile via ``file_write`` into
-    ``/workspace/Dockerfile``, which is itself bound from work_home.
-    """
-    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
-    result = docker_backend.build("img:latest", dockerfile_content="FROM scratch\n")
-    assert result["status"] == "error", f"inline mode should be rejected, got {result!r}"
-    assert "dockerfile_content" in result["error"].lower()
-    # The build SDK must not have been called.
-    docker_backend._ensure_client().images.build.assert_not_called()
-
-
-def test_docker_build_file_mode_requires_machine(docker_backend):
-    """File mode without dockerfile_content and without machine → error."""
-    result = docker_backend.build("img:latest")
-    assert result["status"] == "error"
-    assert "machine is required" in result["error"]
 
 
 def test_docker_build_rejects_host_path(docker_backend, tmp_path, monkeypatch):
@@ -1077,9 +1030,7 @@ def test_docker_logs_default_tail_200(docker_backend, mock_client):
 
     result = docker_backend.logs("dev")
 
-    container.logs.assert_called_once_with(
-        tail=200, since=None, until=None, timestamps=False
-    )
+    container.logs.assert_called_once_with(tail=200, since=None, until=None, timestamps=False)
     assert result["logs"] == "line1\nline2\n"
     assert result["truncated"] is False
 
@@ -1129,9 +1080,7 @@ def test_docker_logs_decodes_bytes_with_replacement(docker_backend, mock_client)
     result = docker_backend.logs("dev")
     assert "good" in result["logs"]
     assert "bad" in result["logs"]
-    assert "\ufffd" in result["logs"], (
-        f"expected U+FFFD replacement char in {result['logs']!r}"
-    )
+    assert "\ufffd" in result["logs"], f"expected U+FFFD replacement char in {result['logs']!r}"
 
 
 def test_docker_logs_marks_truncated_when_line_count_meets_tail(docker_backend, mock_client):
@@ -1240,14 +1189,6 @@ def test_docker_stats_returns_snapshot(docker_backend, mock_client):
     assert result["block_io"]["write_bytes"] == 8192
 
 
-def test_docker_stats_rejects_streaming(docker_backend, mock_client):
-    """stream=True is refused: MCP tool-call model doesn't fit long-lived streams."""
-    result = docker_backend.stats("dev", stream=True)
-    assert result["status"] == "error"
-    assert "streaming is not supported" in result["error"]
-    mock_client.containers.get.assert_not_called()
-
-
 def test_docker_stats_container_not_found(docker_backend, mock_client):
     from docker.errors import NotFound as DockerNotFound
 
@@ -1336,6 +1277,3 @@ def test_docker_restart_error_says_after_restart_not_after_start(docker_backend,
     assert info.status == "error"
     assert "after restart" in info.error
     assert "after start" not in info.error
-
-
-

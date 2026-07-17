@@ -471,7 +471,8 @@ SSH:                ssh_connect / ssh_disconnect / ssh_reconnect / ssh_remove
   `sandbox-mcp.managed=true` label (deterministic, allows reconnection)
 - Shell process: `docker exec -i <container> bash`
 - Container lifecycle: `docker run -d --name <name> --init --restart
-  on-failure:3 <image> sleep infinity`
+  on-failure:3 <image>` (image's own CMD/ENTRYPOINT runs as designed;
+  exec-only behaviour is the image author's responsibility)
 - docker_stop: `docker stop <name>`
 - docker_start: `docker start <name>`
 - docker_remove: `docker rm -f <name>`

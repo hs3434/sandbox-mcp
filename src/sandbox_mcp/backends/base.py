@@ -85,7 +85,3 @@ class Backend(ABC):
         ensure that a crash mid-write leaves the existing target file
         untouched.
         """
-
-    def suggest_paths(self, name: str, missing_path: str) -> list:
-        """Best-effort fuzzy suggestion for a missing path. Default: empty list."""
-        return []

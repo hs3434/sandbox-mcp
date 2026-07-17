@@ -108,11 +108,6 @@ class DockerConfig:
     # To make admin the initial default, set
     # ``[default_machine] enabled = true`` (name defaults to ``admin``).
     admin_machine: str = "admin"
-    # Image used when provisioning the admin container.  Empty falls
-    # back to ``default_image`` — keep them in sync unless the admin
-    # genuinely needs a different toolchain (e.g. busybox for
-    # space-constrained cleanups).
-    admin_image: str = ""
 
     # Docker daemon connection.  Empty ``host`` falls back to ``from_env()``,
     # which reads ``$DOCKER_HOST`` / ``$DOCKER_TLS_VERIFY`` / ``$DOCKER_CERT_PATH``
@@ -228,7 +223,6 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         "docker_write_tmp_prefix": ("docker", "write_tmp_prefix", str),
         "docker_auto_network": ("docker", "auto_network", str),
         "docker_admin_machine": ("docker", "admin_machine", str),
-        "docker_admin_image": ("docker", "admin_image", str),
         "docker_host": ("docker", "host", str),
         "docker_tls_verify": ("docker", "tls_verify", _as_bool),
         "docker_cert_path": ("docker", "cert_path", str),

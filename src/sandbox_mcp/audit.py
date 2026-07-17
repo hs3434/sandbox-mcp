@@ -209,13 +209,6 @@ def reset_default_logger(sink: IO[str] | str | None = None) -> AuditLogger:
     return DEFAULT_AUDIT_LOGGER
 
 
-def disable_audit() -> None:
-    """No-op stub for backwards compatibility. Audit is always on; to
-    silence it, redirect stderr in the host process.
-    """
-    return
-
-
 def query_audit(
     db_path: Path,
     *,

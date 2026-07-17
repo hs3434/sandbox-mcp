@@ -34,7 +34,6 @@ class ShellRegistry:
 
     def open(self, machine: str, session: ShellSession, purpose: str = "") -> str:
         shell_id = f"sh_{uuid.uuid4().hex[:12]}"
-        session.purpose = purpose
         self._shells[shell_id] = {
             "session": session,
             "machine": machine,
@@ -49,10 +48,6 @@ class ShellRegistry:
     def get_machine(self, shell_id: str) -> str | None:
         entry = self._shells.get(shell_id)
         return entry["machine"] if entry else None
-
-    # Backward-compatible alias.
-    def get_target(self, shell_id: str) -> str | None:
-        return self.get_machine(shell_id)
 
     def close(self, shell_id: str) -> bool:
         entry = self._shells.pop(shell_id, None)
@@ -82,9 +77,6 @@ class ShellRegistry:
         self._default_shells[machine] = shell_id
         return machine
 
-    def get_default_id(self, machine: str) -> str | None:
-        return self._default_shells.get(machine)
-
     def list_shells(self, machine: str | None = None) -> list[dict]:
         result = []
         for shell_id, entry in self._shells.items():
@@ -111,7 +103,3 @@ class ShellRegistry:
             self.close(sid)
             count += 1
         return count
-
-    # Backward-compatible alias.
-    def close_all_for_target(self, machine: str) -> int:
-        return self.close_all_for_machine(machine)

@@ -441,7 +441,7 @@ def test_docker_stats_dispatches_to_backend(sandbox_env):
 
     result = sandbox_env.dispatch("docker_stats", {"machine": "dev"})
 
-    backend.stats.assert_called_once_with("dev", stream=False)
+    backend.stats.assert_called_once_with("dev")
     assert result["cpu_percent"] == 1.0
 
 

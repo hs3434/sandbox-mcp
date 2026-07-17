@@ -113,7 +113,6 @@ cert_path = ""
 # this already exists as a peer, ``docker_remove <name>`` it first so the
 # server recreates it with the admin mount (no auto-migration).
 admin_machine = "admin"
-admin_image = ""            # empty = fall back to default_image
 
 [ssh]
 connect_timeout = 10

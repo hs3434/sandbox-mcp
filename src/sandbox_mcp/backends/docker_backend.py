@@ -242,6 +242,7 @@ class DockerBackend(Backend):
     def __init__(self):
         self._client = None  # lazy init
         self._started_at: dict[str, float] = {}
+        self._shell: dict[str, str] = {}
 
     def _ensure_client(self):
         """Return a cached DockerClient, building one on first use.
@@ -292,11 +293,10 @@ class DockerBackend(Backend):
     def create(self, name: str, purpose: str = "", **kwargs) -> TargetInfo:
         docker_cfg = _load_config().docker
         is_admin = bool(docker_cfg.admin_machine) and name == docker_cfg.admin_machine
-        # Admin image: explicit kwarg > admin_image > default_image.
-        if is_admin:
-            image = kwargs.get("image") or docker_cfg.admin_image or docker_cfg.default_image
-        else:
-            image = kwargs.get("image", docker_cfg.default_image)
+        # Image: explicit kwarg > default_image.  Admin has no separate image;
+        # pass image= to docker_run(name=admin, image=...) when you need a
+        # different toolchain for it.
+        image = kwargs.get("image", docker_cfg.default_image)
         # Note: agent-supplied ``volumes`` mounts are intentionally NOT
         # accepted.  The only bind mounts are:
         #   (1) ``work_home/<name>`` → ``/workspace`` (the per-machine
@@ -330,7 +330,6 @@ class DockerBackend(Backend):
         # Container names are the bare machine name.  Namespace is
         # enforced by the ``sandbox-mcp.managed=true`` docker label,
         # set on every container this backend creates (see below).
-        container_name = name
 
         # Ensure shared network for DNS-resolvable container names.
         auto_network = docker_cfg.auto_network
@@ -386,7 +385,7 @@ class DockerBackend(Backend):
             self._ensure_client().containers.run(
                 image,
                 detach=True,
-                name=container_name,
+                name=name,
                 init=True,
                 restart_policy={
                     "Name": docker_cfg.restart_policy_name,
@@ -395,7 +394,6 @@ class DockerBackend(Backend):
                 working_dir="/workspace",
                 volumes=volume_bindings if volume_bindings else None,
                 network=auto_network or None,
-                command="sleep infinity",
                 labels=labels,
             )
         except _docker_module().errors.ImageNotFound:
@@ -417,7 +415,9 @@ class DockerBackend(Backend):
             # Reattach to it instead of failing - this is the
             # idempotent "reattach" behaviour documented for docker_run.
             if getattr(e, "status_code", None) == 409:
-                reattached = self._reattach_existing(name, purpose, image)
+                reattached = self._reattach_existing(
+                    name, purpose, image, shell=kwargs.get("shell", "bash")
+                )
                 if reattached is not None:
                     return reattached
             return TargetInfo(
@@ -429,6 +429,7 @@ class DockerBackend(Backend):
             )
 
         self._started_at[name] = time.time()
+        self._shell[name] = kwargs.get("shell", "bash")
         # ``created`` is filled in lazily by ``get_info`` (it queries the
         # daemon for accurate timestamps).  Mark the machine as running
         # so the dispatcher can surface it in ``docker_ps`` immediately.
@@ -440,7 +441,9 @@ class DockerBackend(Backend):
             image=image,
         )
 
-    def _reattach_existing(self, name: str, purpose: str, image: str) -> TargetInfo | None:
+    def _reattach_existing(
+        self, name: str, purpose: str, image: str, shell: str = "bash"
+    ) -> TargetInfo | None:
         """Adopt an already-existing container after a name-conflict (409).
 
         Called from :meth:`create` when ``containers.run`` reports the
@@ -464,6 +467,10 @@ class DockerBackend(Backend):
         a different non-empty purpose, a note flags it (the agent must
         remove + recreate to change purpose).  The returned TargetInfo
         carries the EXISTING purpose, not the caller's.
+
+        ``shell`` is the user-facing exec shell (defaults to ``bash``);
+        reattach adopts the caller's choice so subsequent ``docker exec``
+        calls match what they would have been on a fresh create.
         """
         docker_errors = _docker_module().errors
         try:
@@ -492,6 +499,7 @@ class DockerBackend(Backend):
                 f"; passed purpose {purpose!r} ignored (existing has "
                 f"{existing_purpose!r}); remove+recreate to change purpose"
             )
+        self._shell[name] = shell
         return self._running_info(container, name, purpose=existing_purpose, image=image, note=note)
 
     def _running_info(
@@ -501,8 +509,6 @@ class DockerBackend(Backend):
         purpose: str = "",
         image: str = "",
         note: str = "",
-        *,
-        op_label: str = "start",
     ) -> TargetInfo:
         """Build a TargetInfo reflecting the container's TRUE state after a
         start attempt.
@@ -538,7 +544,7 @@ class DockerBackend(Backend):
                 note=note,
             )
         # Not running -- assemble a diagnostic hint.
-        parts = [f"container is {status!r} after {op_label}"]
+        parts = [f"container is {status!r} after start"]
         exit_code = state.get("ExitCode")
         if exit_code not in (None, 0):
             parts.append(f"exit_code={exit_code}")
@@ -565,9 +571,8 @@ class DockerBackend(Backend):
 
     def start(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
             container.start()
         except (docker.errors.APIError, docker.errors.NotFound) as e:
             return TargetInfo(name=name, backend="docker", status="error", error=str(e))
@@ -578,9 +583,8 @@ class DockerBackend(Backend):
 
     def stop(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
             container.stop(timeout=10)
             return TargetInfo(name=name, backend="docker", status="stopped")
         except (docker.errors.APIError, docker.errors.NotFound) as e:
@@ -588,20 +592,18 @@ class DockerBackend(Backend):
 
     def remove(self, name: str) -> dict:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
             container.remove(force=True)
             self._started_at.pop(name, None)
-            return {"target": name, "status": "removed"}
+            return {"machine": name, "status": "removed"}
         except (docker.errors.APIError, docker.errors.NotFound) as e:
-            return {"target": name, "status": "error", "error": str(e)}
+            return {"machine": name, "status": "error", "error": str(e)}
 
     def get_info(self, name: str) -> TargetInfo:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
             status = container.attrs.get("State", {}).get("Status", "unknown")
             running = status == "running"
             image = (
@@ -631,9 +633,8 @@ class DockerBackend(Backend):
         for choosing a tag that won't collide with other machines.
         """
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
             repo, tag_part = ([*image_tag.rsplit(":", 1), ""])[:2]
             if not repo or ":" not in image_tag:
                 # container.commit() rejects tags without ':' — guard here
@@ -667,9 +668,9 @@ class DockerBackend(Backend):
         if raw:
             return container.attrs
 
-        state = (container.attrs.get("State") or {})
-        config = (container.attrs.get("Config") or {})
-        host_cfg = (container.attrs.get("HostConfig") or {})
+        state = container.attrs.get("State") or {}
+        config = container.attrs.get("Config") or {}
+        host_cfg = container.attrs.get("HostConfig") or {}
         restart = host_cfg.get("RestartPolicy") or {}
         health = state.get("Health") or {}
 
@@ -737,9 +738,7 @@ class DockerBackend(Backend):
             return {"error": str(e.explanation or e), "status": "error"}
 
         try:
-            raw = container.logs(
-                tail=tail, since=since, until=until, timestamps=timestamps
-            )
+            raw = container.logs(tail=tail, since=since, until=until, timestamps=timestamps)
         except (docker.errors.NotFound, docker.errors.APIError) as e:
             return {"error": str(e.explanation or e), "status": "error"}
 
@@ -787,19 +786,12 @@ class DockerBackend(Backend):
             "summary": {"added": len(added), "changed": len(changed), "deleted": len(deleted)},
         }
 
-    def stats(self, name: str, *, stream: bool = False) -> dict:
-        """One-shot resource snapshot.  Streaming is explicitly refused —
-        the MCP tool-call model is request/response; live monitoring is
-        a loop of repeated ``stats()`` calls.
+    def stats(self, name: str) -> dict:
+        """One-shot resource snapshot.
+
+        The MCP tool-call model is request/response; for live monitoring
+        the agent loops on repeated ``docker_stats`` calls.
         """
-        if stream:
-            return {
-                "error": (
-                    "streaming is not supported; "
-                    "call docker_stats again for the next snapshot"
-                ),
-                "status": "error",
-            }
         docker = _docker_module()
         try:
             container = self._ensure_client().containers.get(name)
@@ -836,11 +828,7 @@ class DockerBackend(Backend):
         system_delta = cur_sys - prev_sys
         if system_delta <= 0 or cpu_delta < 0:
             return 0.0
-        num_cpus = (
-            cpu_stats.get("online_cpus")
-            or len(cpu_usage.get("percpu_usage") or [])
-            or 1
-        )
+        num_cpus = cpu_stats.get("online_cpus") or len(cpu_usage.get("percpu_usage") or []) or 1
         return (cpu_delta / system_delta) * num_cpus * 100.0
 
     @staticmethod
@@ -880,18 +868,29 @@ class DockerBackend(Backend):
         except (docker.errors.NotFound, docker.errors.APIError) as e:
             return TargetInfo(name=name, backend="docker", status="error", error=str(e))
 
-        # Use _running_info to confirm the container actually came back.
-        info = self._running_info(container, name, op_label="restart")
+        # Confirm the container actually came back.  Append the operation
+        # name to the error message inline so the helper stays simple.
+        info = self._running_info(container, name)
+        if info.error:
+            info = TargetInfo(
+                name=info.name,
+                backend=info.backend,
+                status=info.status,
+                purpose=info.purpose,
+                image=info.image,
+                created=info.created,
+                note=info.note,
+                error=info.error.replace("after start", "after restart"),
+            )
         return info
 
     def build(
         self,
         image_tag: str,
         *,
-        machine: str | None = None,
+        machine: str,
         dockerfile: str = "/workspace/Dockerfile",
         context_dir: str = "/workspace",
-        dockerfile_content: str | None = None,
     ) -> dict:
         """Build a Docker image from a Dockerfile the agent has already
         written into a sandboxed container's ``/workspace/`` (via
@@ -912,37 +911,16 @@ class DockerBackend(Backend):
         raises ``BuildError`` (missing Dockerfile) or ``NotFound``
         (missing context dir) which we surface verbatim.
 
-        ``dockerfile_content`` is intentionally NOT accepted.  Inline
-        mode used to stage the Dockerfile under ``work_home/_builds/``
-        and feed it directly to ``docker build`` — bypassing the
-        sandbox's file-write audit trail AND dodging the work_home
-        visibility check.  A malicious inline Dockerfile
-        (``RUN --mount=type=bind,source=/,...``) executes in a
-        daemon-orchestrated container with full host kernel
-        capabilities, so inline mode is a host-RCE vector.  Use file
-        mode instead.
+        Inline Dockerfile mode (``dockerfile_content``) was removed for
+        security: it bypassed the sandbox's file-write audit trail AND
+        dodged the work_home visibility check.  A malicious inline
+        Dockerfile (``RUN --mount=type=bind,source=/,...``) executes in
+        a daemon-orchestrated container with full host kernel
+        capabilities, so inline mode is a host-RCE vector.  Write the
+        Dockerfile via :func:`sandbox_file_write` first, then build.
         """
         docker = _docker_module()
 
-        # Inline mode removed for security — see docstring.
-        if dockerfile_content is not None:
-            return {
-                "error": (
-                    "dockerfile_content is not supported: write the Dockerfile "
-                    "via sandbox_file_write into /workspace/Dockerfile first, "
-                    "then call docker_build without dockerfile_content."
-                ),
-                "image_tag": image_tag,
-                "status": "error",
-            }
-
-        # File mode — translate container paths to host paths.
-        if machine is None:
-            return {
-                "error": "machine is required (file mode only)",
-                "image_tag": image_tag,
-                "status": "error",
-            }
         try:
             ctx_host = _container_to_host(context_dir, machine)
             df_host = _container_to_host(dockerfile, machine)
@@ -962,22 +940,6 @@ class DockerBackend(Backend):
             return {"image_tag": image_tag, "status": "built"}
         except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
             return {"error": str(e), "image_tag": image_tag, "status": "error"}
-
-    def suggest_paths(self, name: str, missing_path: str) -> list:
-        dirname = str(Path(missing_path).parent)
-        basename = Path(missing_path).name
-        ls_cmd = (
-            f"ls -1 {shlex.quote(dirname)} 2>/dev/null | grep -i {shlex.quote(basename)} | head -5"
-        )
-        result = self.exec_oneoff(name, ls_cmd, timeout=10)
-        if result.get("exit_code") not in (0, None) or not result.get("output"):
-            return []
-        prefix = dirname.rstrip("/")
-        return [
-            f"{prefix}/{line.strip()}"
-            for line in (result["output"] or "").splitlines()
-            if line.strip()
-        ]
 
     # ---- discovery (direct daemon queries, no MachineRegistry) ----
 
@@ -1040,24 +1002,22 @@ class DockerBackend(Backend):
 
     def open_shell(self, name: str) -> ShellSession:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
         except docker.errors.NotFound as e:
-            raise RuntimeError(f"Container {container_name} not found") from e
-        process = DockerExecProcess(container, ["bash"])
+            raise RuntimeError(f"Container {name} not found") from e
+        process = DockerExecProcess(container, [self._shell.get(name, "bash")])
         return ShellSession(process=process)
 
     def exec_oneoff(self, name: str, command: str, timeout: int = 30) -> dict:
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
         except docker.errors.NotFound:
             return {"exit_code": -1, "output": "", "stderr": "container not found"}
         try:
             exit_code, output = container.exec_run(
-                cmd=["bash", "-c", command],
+                cmd=[self._shell.get(name, "bash"), "-c", command],
                 stdout=True,
                 stderr=True,
                 demux=False,
@@ -1074,9 +1034,8 @@ class DockerBackend(Backend):
         import uuid
 
         docker = _docker_module()
-        container_name = name
         try:
-            container = self._ensure_client().containers.get(container_name)
+            container = self._ensure_client().containers.get(name)
         except docker.errors.NotFound:
             return {"status": "error", "error": "container not found"}
 

@@ -72,7 +72,8 @@ def test_get_or_create_default():
     mock_shell = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
     shell_id = reg.get_or_create_default("dev", lambda: mock_shell)
     assert shell_id.startswith("sh_")
-    assert reg.get_default_id("dev") == shell_id
+    shells = reg.list_shells(machine="dev")
+    assert next(s for s in shells if s["shell_id"] == shell_id)["is_default"] is True
     shell_id2 = reg.get_or_create_default("dev", lambda: MagicMock())
     assert shell_id == shell_id2
 
@@ -84,7 +85,6 @@ def test_set_default_shell():
     machine = reg.set_default(shell2)
     assert machine == "dev"
     assert reg.get_machine(shell2) == "dev"
-    assert reg.get_default_id("dev") == shell2
     shells = reg.list_shells(machine="dev")
     assert next(s for s in shells if s["shell_id"] == shell1)["is_default"] is False
     assert next(s for s in shells if s["shell_id"] == shell2)["is_default"] is True
