@@ -224,11 +224,16 @@ DOCKER_HELP_RESPONSE = {
             "description": (
                 "Build a Docker image from a Dockerfile already written "
                 "into a sandboxed container's /workspace/ via "
-                "file_write.  Provide machine (default "
-                "dockerfile=/workspace/Dockerfile, context_dir=/workspace); "
-                "sandbox-mcp maps those container paths to work_home/<machine>/ "
-                "on the host.  Inline dockerfile_content is not supported "
-                "(see docker_backend.build docstring for rationale)."
+                "file_write.  dockerfile and context_dir MUST both live "
+                "under /workspace/ — only that subtree is bind-mounted "
+                "to the host (work_home/<machine>/), so anything "
+                "outside it has no host-side file for the docker "
+                "daemon to read and the build will fail with "
+                "'context_dir not a directory' even though the file "
+                "exists inside the container.  Defaults: "
+                "dockerfile=/workspace/Dockerfile, context_dir=/workspace.  "
+                "Inline dockerfile_content is not supported (see "
+                "docker_backend.build docstring for rationale)."
             ),
             "required": {"image_tag": "string", "machine": "string"},
             "optional": {

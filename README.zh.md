@@ -299,7 +299,11 @@ sandbox_env(action="docker_build",
 ```
 
 **沙箱边界保护**：`dockerfile` 和 `context_dir` 必须在 `/workspace/` 下，
-宿主路径会被拒绝 —— 防止 agent 读到 `work_home` 之外的文件。
+宿主路径会被拒绝 —— 防止 agent 读到 `work_home` 之外的文件。只有
+`/workspace/` 子树被 bind-mount 到宿主,所以容器里的 `/etc/foo`
+这样的文件在宿主侧根本没有对应物,docker daemon 读不到;build
+会直接报 "context not a directory",即便 agent 自己 `shell_exec`
+能看到那个文件。
 
 > **为什么没有内联 `dockerfile_content`?** 内联模式会跳过 sandbox
 > 的 file-write 审计链,而且 Dockerfile 直接喂给 docker daemon,build

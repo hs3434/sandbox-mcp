@@ -316,7 +316,11 @@ sandbox_env(action="docker_build",
 
 **Sandbox boundary**: `dockerfile` and `context_dir` must live under
 `/workspace/`. Host paths are rejected — the agent cannot reach files
-outside its assigned `work_home/<machine>/`.
+outside its assigned `work_home/<machine>/`.  And only that subtree is
+bind-mounted to the host, so a file at e.g. `/etc/foo` inside the
+container has no host-side counterpart for the docker daemon to read;
+the build will fail with "context not a directory" even though the
+file is visible to the agent's `shell_exec`.
 
 > **Why no inline `dockerfile_content`?** An inline Dockerfile would
 > skip the sandbox's file-write audit trail AND be fed verbatim to the
