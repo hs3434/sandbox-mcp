@@ -40,11 +40,20 @@
 # Workspace path note
 # -------------------
 # sandbox-mcp runs inside this container but manages Docker containers via the
-# HOST Docker daemon (socket mount).  Set ``work_home`` in config.toml to an
-# absolute HOST-side path -- the Docker daemon resolves it on the host and
-# auto-creates subdirectories as needed, so no workspace volume mount is
-# required here.  ``~`` is NOT expanded (sandbox-mcp refuses paths starting
-# with ``~`` — see ``storage.work_home`` in config.example.toml).
+# HOST Docker daemon (socket mount).  Set ``work_home`` in config.toml (or
+# override via WORK_HOME in .env) to an absolute HOST-side path.
+#
+# WORK_HOME MUST be bind-mounted into this container.  Most operations
+# (docker_run, shell_exec, file_*, docker cp) go through the daemon and
+# don't need filesystem access here, BUT ``docker_build`` is the
+# exception: the docker SDK client (running inside this container)
+# tar-walks the build context with os.walk + open() before POSTing to
+# the daemon, so the path has to be reachable in this container's
+# filesystem.  Without this mount you get a misleading
+# "You must specify a directory to build in path" error.
+#
+# ``~`` is NOT expanded (sandbox-mcp refuses paths starting with
+# ``~`` — see ``storage.work_home`` in config.example.toml).
 
 services:
   sandbox-mcp:
@@ -56,10 +65,13 @@ services:
     ports:
       - "${SANDBOX_MCP_PORT:-8010}:${SANDBOX_MCP_PORT:-8010}"
 
-    # Pass the chosen port into the container so the healthcheck and the
-    # sandbox-mcp process itself agree on which port to listen on.
+    # Pass the chosen port + work_home into the container so the
+    # healthcheck / filesystem path / config all agree on the same value.
     environment:
       SANDBOX_MCP_SERVER_PORT: ${SANDBOX_MCP_PORT:-8010}
+      # Override config.toml's [storage] work_home so the in-container
+      # get_work_home() returns the bind-mounted path.
+      SANDBOX_MCP_STORAGE_WORK_HOME: ${WORK_HOME:-/var/lib/sandbox-mcp}
 
     volumes:
       # Docker socket - lets sandbox-mcp manage containers on the host.
@@ -73,6 +85,11 @@ services:
 
       # Config directory: auth_tokens, config.toml, audit.log
       - ./config:/home/sandbox/.sandbox-mcp
+
+      # work_home: required for docker_build (SDK client tar-walks the
+      # build context).  See "Workspace path note" above for the why.
+      # Override via WORK_HOME in .env if config.toml uses a non-default.
+      - "${WORK_HOME:-/var/lib/sandbox-mcp}:${WORK_HOME:-/var/lib/sandbox-mcp}"
 
     healthcheck:
       test:

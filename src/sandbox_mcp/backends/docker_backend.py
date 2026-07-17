@@ -1138,7 +1138,12 @@ class DockerBackend(Backend):
                     f"{_WORKSPACE_BIND}/ are NOT visible from "
                     f"machine=B. Verify with "
                     f"sandbox_file_read(machine={machine!r}, "
-                    f"path={dockerfile!r})."
+                    f"path={dockerfile!r}). "
+                    f"NOTE: when sandbox-mcp runs inside a container, "
+                    f"work_home MUST be bind-mounted into the mcp "
+                    f"container — the docker SDK client tar-walks the "
+                    f"build context locally before sending to the "
+                    f"daemon. See docker-compose.yml 'Workspace path note'."
                 ),
             }
         except docker.errors.ImageNotFound as e:

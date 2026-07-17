@@ -16,6 +16,7 @@
 
 import socket
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1412,3 +1413,33 @@ def test_docker_build_wraps_typeerror(docker_backend, mock_client):
     # not just echo the opaque SDK message.
     assert "context_dir" in result["error"]
     assert "/workspace/Dockerfile" in result["error"]
+    # AND it must mention the compose bind-mount requirement so an operator
+    # whose mcp container doesn't see work_home has an actionable hint
+    # instead of the opaque SDK error.
+    assert "bind-mounted" in result["error"] or "bind mount" in result["error"]
+
+
+def test_docker_compose_mounts_work_home():
+    """docker-compose.yml must bind-mount WORK_HOME so docker_build works.
+
+    Regression: the SDK's ``images.build(path=...)`` tar-walks the build
+    context in the SDK client process before POSTing to the daemon. When
+    sandbox-mcp runs in a container, that walk happens in the mcp
+    container's filesystem — so work_home has to be mounted there. The
+    env var ``SANDBOX_MCP_STORAGE_WORK_HOME`` must agree with the mount
+    target, otherwise ``get_work_home()`` returns a different path than
+    the one bind-mounted and the SDK's ``os.path.isdir`` check fails.
+    """
+    compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+    compose = compose_path.read_text()
+
+    # The bind mount: ${WORK_HOME:-<default>}:${WORK_HOME:-<default>}
+    assert "${WORK_HOME:-/var/lib/sandbox-mcp}:${WORK_HOME:-/var/lib/sandbox-mcp}" in compose, (
+        "docker-compose.yml must bind-mount WORK_HOME into the mcp container "
+        "so docker_build can tar-walk the context."
+    )
+    # The env override: get_work_home() must return the bind-mounted path.
+    assert "SANDBOX_MCP_STORAGE_WORK_HOME: ${WORK_HOME:-/var/lib/sandbox-mcp}" in compose, (
+        "docker-compose.yml must export SANDBOX_MCP_STORAGE_WORK_HOME so the "
+        "in-container path matches the mount."
+    )
