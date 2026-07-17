@@ -43,7 +43,7 @@ work_home = "~/.sandbox-mcp/workspaces/"
 # Sub-directory under work_home used as the inter-container shared
 # workspace (see docs/sandbox-boundary.md).  Every docker_run auto-
 # mounts work_home/<share_subdir>/<machine>/ rw into the container at
-# /workspace/share/<machine>/, plus every peer subdirectory read-only,
+# /share/<machine>/, plus every peer subdirectory read-only,
 # so containers collaborate via the filesystem without any per-run
 # configuration.  Set to "" (empty string) to disable the share mount.
 # Overridable via $SANDBOX_MCP_STORAGE_SHARE_SUBDIR.

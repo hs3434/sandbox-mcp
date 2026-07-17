@@ -109,7 +109,7 @@ dict.
     {"source": "/home/x/.sandbox-mcp/workspaces/dev",
      "destination": "/workspace", "mode": "rw"},
     {"source": "/home/x/.sandbox-mcp/workspaces/_share",
-     "destination": "/workspace/share", "mode": "ro"}
+     "destination": "/share", "mode": "ro"}
   ],
   "labels": {
     "sandbox-mcp.managed": "true",

@@ -48,6 +48,13 @@ def _docker_module():
     return docker
 
 
+# Bind-mount targets inside the container.  Single source of truth so a
+# future rename only touches this file (the agent-facing schema, tests,
+# and READMEs all mirror these constants via grep-and-replace).
+_WORKSPACE_BIND = "/workspace"
+_SHARE_BIND = "/share"
+
+
 def _container_to_host(container_path: str, machine: str) -> Path:
     """Translate a path under ``/workspace/`` to its host bind-mount location.
 
@@ -56,8 +63,13 @@ def _container_to_host(container_path: str, machine: str) -> Path:
     file the agent wrote via :func:`sandbox_file_write` lives at the
     translated host path on the operator's filesystem.
 
-    Anything outside ``/workspace/`` is rejected — exposing host paths
-    to the agent would break the sandbox boundary.
+    Anything outside ``/workspace/`` is rejected — two reasons: (a) host
+    paths would break the sandbox boundary, and (b) ``/workspace/`` is
+    the ONLY bind-mount into the container, so other container paths
+    (e.g. ``/etc/foo``) live in the container's overlay FS only and the
+    docker daemon (running on the host) cannot read them.  The agent
+    sees those files fine via ``shell_exec``, but ``docker build`` (and
+    every other path-translating tool) will reject them.
     """
     if container_path != "/workspace" and not container_path.startswith("/workspace/"):
         raise ValueError(f"path must be under /workspace (sandbox boundary): {container_path!r}")
@@ -147,13 +159,16 @@ def _build_share_bindings(name: str) -> dict:
     Two mounts, fixed regardless of peer count:
 
     1. The whole share root is bind-mounted **read-only** at
-       ``/workspace/share/``.  The kernel evaluates a mount's contents
-       at access time, so peer subdirectories created *after* a
-       container starts are visible to it on the next ``ls`` — no
-       remount needed.
+       ``/share/`` (top-level, NOT under ``/workspace/`` — visually
+       nesting it there would suggest a relationship that doesn't
+       exist: ``/workspace`` and ``/share`` are sibling host paths
+       with completely different roles).  The kernel evaluates a
+       mount's contents at access time, so peer subdirectories
+       created *after* a container starts are visible to it on the
+       next ``ls`` — no remount needed.
     2. The container's own subdirectory is overlaid **read-write** at
-       ``/workspace/share/<name>/``, so the agent can drop artefacts
-       for peers to read while still being unable to tamper with peer
+       ``/share/<name>/``, so the agent can drop artefacts for peers
+       to read while still being unable to tamper with peer
        subdirectories (the parent mount is ro; only the overlay path
        is writable).
 
@@ -173,12 +188,36 @@ def _build_share_bindings(name: str) -> dict:
     share_root.mkdir(parents=True, exist_ok=True)
     self_dir.mkdir(parents=True, exist_ok=True)
     return {
-        str(share_root.resolve()): {"bind": "/workspace/share", "mode": "ro"},
+        str(share_root.resolve()): {"bind": _SHARE_BIND, "mode": "ro"},
         str(self_dir.resolve()): {
-            "bind": f"/workspace/share/{name}",
+            "bind": f"{_SHARE_BIND}/{name}",
             "mode": "rw",
         },
     }
+
+
+def _tail_build_log(build_log, max_entries=5):
+    """Extract the last *max_entries* lines of a docker BuildError log.
+
+    The log is a list of dicts (one per build step), where each dict
+    may have ``"stream"``, ``"error"``, ``"errorDetail"``, etc. as keys.
+    Returns an empty string when the log is empty or can't be read.
+    """
+    if not build_log:
+        return ""
+    try:
+        tail = list(build_log)[-max_entries:]
+        parts = []
+        for entry in tail:
+            if isinstance(entry, dict):
+                line = entry.get("error") or entry.get("stream") or ""
+                # Trim trailing whitespace to avoid spilling metadata.
+                parts.append(str(line).strip() if line else str(entry))
+            else:
+                parts.append(str(entry))
+        return "; ".join(p.strip() for p in parts if p.strip())
+    except Exception:
+        return ""
 
 
 class DockerExecProcess:
@@ -377,9 +416,11 @@ class DockerBackend(Backend):
         #   (1) ``work_home/<name>`` → ``/workspace`` (the per-machine
         #       workspace, rw), and
         #   (2) the auto-discovered shared directory
-        #       ``work_home/<share_subdir>/<name>`` → ``/workspace/share/<name>``
+        #       ``work_home/<share_subdir>/<name>`` → ``/share/<name>``
         #       (rw) plus every peer subdirectory read-only — see
-        #       ``_build_share_bindings``.
+        #       ``_build_share_bindings``.  Note that ``/share`` lives at
+        #       the container's root, not under ``/workspace`` — the two
+        #       paths serve different roles and shouldn't visually nest.
         #
         # EXCEPTION — the admin machine (name == ``docker.admin_machine``,
         # non-empty): it gets an ADDITIONAL mount
@@ -415,7 +456,7 @@ class DockerBackend(Backend):
         # it to /workspace inside the container.  The agent never sees the
         # host path — it just works in /workspace.
         machine_dir = get_work_dir(name)
-        volume_bindings: dict = {machine_dir: {"bind": "/workspace", "mode": "rw"}}
+        volume_bindings: dict = {machine_dir: {"bind": _WORKSPACE_BIND, "mode": "rw"}}
 
         if is_admin:
             # Global view: admin sees the entire work_home tree at /host.
@@ -466,7 +507,7 @@ class DockerBackend(Backend):
                     "Name": docker_cfg.restart_policy_name,
                     "MaximumRetryCount": docker_cfg.restart_max_retry_count,
                 },
-                working_dir="/workspace",
+                working_dir=_WORKSPACE_BIND,
                 volumes=volume_bindings if volume_bindings else None,
                 network=auto_network or None,
                 labels=labels,
@@ -997,8 +1038,8 @@ class DockerBackend(Backend):
         image_tag: str,
         *,
         machine: str,
-        dockerfile: str = "/workspace/Dockerfile",
-        context_dir: str = "/workspace",
+        dockerfile: str = _WORKSPACE_BIND + "/Dockerfile",
+        context_dir: str = _WORKSPACE_BIND,
     ) -> dict:
         """Build a Docker image from a Dockerfile the agent has already
         written into a sandboxed container's ``/workspace/`` (via
@@ -1006,8 +1047,20 @@ class DockerBackend(Backend):
         on the host at ``work_home/<machine>/``; this method translates
         the container paths back to host paths and runs ``docker build``.
 
-        ``dockerfile`` and ``context_dir`` must both be under
-        ``/workspace/`` — host paths are not accepted (sandbox boundary).
+        ``dockerfile`` and ``context_dir`` must both be **CONTAINER
+        paths** under ``/workspace/`` — they are NOT host paths on the
+        mcp process filesystem.  Host paths are rejected by the sandbox
+        boundary, AND ``/workspace/`` is the only bind-mount into the
+        container: any other container path (e.g. ``/etc/foo``) exists
+        only in the container's overlay FS and the docker daemon
+        (running on the host) cannot read it.  The agent sees those
+        files fine via ``shell_exec``, but this method will refuse them.
+
+        Each ``docker_run(machine=...)`` owns its own ``/workspace/`` —
+        files written into ``machine=A``'s ``/workspace/`` are NOT
+        visible from ``machine=B``.  Mixing machines is a common
+        mistake; the ``error_kind`` returned below tells the agent
+        which class of mistake it made.
 
         Existence of the Dockerfile / context is delegated to the Docker
         daemon — the mcp process does NOT pre-check via ``is_file()``
@@ -1015,9 +1068,7 @@ class DockerBackend(Backend):
         the daemon's.  When sandbox-mcp runs inside a container with a
         docker socket mount, ``work_home`` is a HOST-side path invisible
         to the mcp process; a pre-check there would falsely report
-        "not found" for files that the daemon can see fine.  The daemon
-        raises ``BuildError`` (missing Dockerfile) or ``NotFound``
-        (missing context dir) which we surface verbatim.
+        "not found" for files that the daemon can see fine.
 
         Inline Dockerfile mode (``dockerfile_content``) was removed for
         security: it bypassed the sandbox's file-write audit trail AND
@@ -1026,18 +1077,50 @@ class DockerBackend(Backend):
         a daemon-orchestrated container with full host kernel
         capabilities, so inline mode is a host-RCE vector.  Write the
         Dockerfile via :func:`sandbox_file_write` first, then build.
+
+        Error response shape (always includes ``machine`` + ``image_tag``):
+
+        - ``status="error"`` with one of:
+
+          - ``error_kind="bad_path"`` — agent passed a path outside
+            ``/workspace/`` (host path or other container path).  Hint
+            in the message explains the container-vs-host distinction.
+          - ``error_kind="context_invalid"`` — daemon rejected the
+            context because it isn't an existing directory.  Almost
+            always means the agent never wrote anything into THIS
+            machine's ``/workspace/``, e.g. wrote into a different
+            container by mistake.
+          - ``error_kind="dockerfile_missing"`` — daemon couldn't open
+            the Dockerfile within the build context.  Hint points to
+            verifying the path matches the ``sandbox_file_write`` call.
+          - ``error_kind="base_image_not_found"`` — the ``FROM <image>``
+            can't be resolved (typo, private registry needs
+            ``docker login``, etc.).
+          - ``error_kind="build_failed"`` — everything else (Dockerfile
+            syntax error, ``RUN`` failure, ``COPY`` target missing,
+            etc.).  The daemon's build log is appended when available.
         """
         docker = _docker_module()
+        base = {"image_tag": image_tag, "machine": machine}
 
         try:
             ctx_host = _container_to_host(context_dir, machine)
             df_host = _container_to_host(dockerfile, machine)
         except ValueError as e:
             return {
-                "error": str(e),
-                "image_tag": image_tag,
+                **base,
                 "status": "error",
+                "error_kind": "bad_path",
+                "error": (
+                    f"[machine={machine!r}] {e}. NOTE: dockerfile and "
+                    f"context_dir must be CONTAINER paths inside "
+                    f"machine {machine!r} (paths under {_WORKSPACE_BIND}/), "
+                    f"NOT host paths on the mcp process filesystem. "
+                    f"Defaults: dockerfile={dockerfile!r}, "
+                    f"context_dir={context_dir!r}."
+                ),
             }
+
         try:
             self._ensure_client().images.build(
                 path=str(ctx_host),
@@ -1045,25 +1128,64 @@ class DockerBackend(Backend):
                 tag=image_tag,
                 rm=True,
             )
-            return {"image_tag": image_tag, "status": "built"}
-        except (docker.errors.BuildError, docker.errors.APIError, OSError) as e:
-            return {"error": str(e), "image_tag": image_tag, "status": "error"}
+            return {**base, "status": "built"}
         except TypeError as e:
-            # docker SDK raises TypeError when ``path`` is not a directory
-            # (the SDK's own internal check).  Wrap with a hint pointing
-            # to the most likely cause — context_dir resolves to a host
-            # path that doesn't exist or isn't a directory.
             return {
-                "error": (
-                    f"docker build context error: {e}.  The agent-written "
-                    "Dockerfile is mapped from /workspace/ on the container "
-                    "to work_home/<machine>/ on the host — check that "
-                    f"context_dir ({context_dir!r}) and dockerfile "
-                    f"({dockerfile!r}) were actually written via "
-                    "sandbox_file_write before calling docker_build."
-                ),
-                "image_tag": image_tag,
+                **base,
                 "status": "error",
+                "error_kind": "context_invalid",
+                "error": (
+                    f"[machine={machine!r}] docker build context error: "
+                    f"{e}. context_dir={context_dir!r} resolved to host "
+                    f"path {str(ctx_host)!r} which is not an existing "
+                    f"directory. Each docker_run(machine=...) owns its "
+                    f"own {_WORKSPACE_BIND}/ — files in machine=A's "
+                    f"{_WORKSPACE_BIND}/ are NOT visible from "
+                    f"machine=B. Verify with "
+                    f"sandbox_file_read(machine={machine!r}, "
+                    f"path={dockerfile!r})."
+                ),
+            }
+        except docker.errors.ImageNotFound as e:
+            return {
+                **base,
+                "status": "error",
+                "error_kind": "base_image_not_found",
+                "error": (
+                    f"[machine={machine!r}] base image not found: {e}. "
+                    f"The FROM <image> in your Dockerfile couldn't be "
+                    f"resolved — typo, registry typo, or a private "
+                    f"registry that needs `docker login` first."
+                ),
+            }
+        except docker.errors.BuildError as e:
+            msg_lower = (e.msg or "").lower()
+            log_tail = _tail_build_log(e.build_log)
+            if "failed to read dockerfile" in msg_lower or "no such file" in msg_lower:
+                kind = "dockerfile_missing"
+                hint = (
+                    f" Verify {dockerfile!r} was written via "
+                    f"sandbox_file_write(machine={machine!r}, "
+                    f"path={dockerfile!r})."
+                )
+            else:
+                kind = "build_failed"
+                hint = ""
+            return {
+                **base,
+                "status": "error",
+                "error_kind": kind,
+                "error": (
+                    f"[machine={machine!r}] {e.msg or e}{hint}"
+                    + (f"  Build log tail: {log_tail}" if log_tail else "")
+                ),
+            }
+        except (docker.errors.APIError, OSError) as e:
+            return {
+                **base,
+                "status": "error",
+                "error_kind": "build_failed",
+                "error": f"[machine={machine!r}] {e}",
             }
 
     # ---- discovery (direct daemon queries, no MachineRegistry) ----

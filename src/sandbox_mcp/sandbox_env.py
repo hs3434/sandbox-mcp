@@ -94,7 +94,9 @@ HELP_RESPONSE = {
     "note": (
         "Core tools are directly exposed as shell_exec, "
         "shell_read, and file_read/write/patch/search. "
-        "Machine-aware tools support optional machine."
+        "Machine-aware tools support optional machine. "
+        "Docker containers also have an inter-container share at "
+        "/share/ for collaboration (see docker_run for details)."
     ),
 }
 
@@ -127,12 +129,14 @@ DOCKER_HELP_RESPONSE = {
                 "and exposed as the container's working directory.  "
                 "Inter-container sharing is automatic: every container "
                 "also sees work_home/<share_subdir>/ (default `_share/`) "
-                "bind-mounted at /workspace/share/ — the container's own "
-                "subdirectory at /workspace/share/<machine>/ is read-write, "
-                "every other peer machine's subdirectory is read-only.  "
-                "Convention: write shared artefacts to "
-                "/workspace/share/<machine>/, read peers' output from "
-                '/workspace/share/<peer>/.  Set `[storage] share_subdir = ""` '
+                "bind-mounted at /share/ (top-level, NOT under /workspace/ "
+                "— the two are sibling host paths with different roles: "
+                "only /workspace is the per-machine workspace).  The "
+                "container's own subdirectory at /share/<machine>/ is "
+                "read-write, every other peer machine's subdirectory is "
+                "read-only.  Convention: write shared artefacts to "
+                "/share/<machine>/, read peers' output from "
+                '/share/<peer>/.  Set `[storage] share_subdir = ""` '
                 "to disable.  Arbitrary host paths remain unmountable "
                 "(sandbox boundary) — no `/etc`, `/root`, or docker socket "
                 "ever leaks into a container via sandbox-mcp.  "
@@ -224,16 +228,23 @@ DOCKER_HELP_RESPONSE = {
             "description": (
                 "Build a Docker image from a Dockerfile already written "
                 "into a sandboxed container's /workspace/ via "
-                "file_write.  dockerfile and context_dir MUST both live "
-                "under /workspace/ — only that subtree is bind-mounted "
-                "to the host (work_home/<machine>/), so anything "
-                "outside it has no host-side file for the docker "
-                "daemon to read and the build will fail with "
-                "'context_dir not a directory' even though the file "
-                "exists inside the container.  Defaults: "
-                "dockerfile=/workspace/Dockerfile, context_dir=/workspace.  "
-                "Inline dockerfile_content is not supported (see "
-                "docker_backend.build docstring for rationale)."
+                "file_write.  dockerfile and context_dir MUST both be "
+                "CONTAINER paths under /workspace/ — /workspace/ is the "
+                "only bind-mount from the host (work_home/<machine>), so "
+                "other container paths (e.g. /etc/foo) exist only in the "
+                "container's overlay FS and the docker daemon (running "
+                "on the host) cannot read them, even though shell_exec "
+                "sees them fine.  The will reject non-/workspace/ paths "
+                "with error_kind='bad_path'.  "
+                "Each docker_run(machine=...) owns its own /workspace/ "
+                "— files in machine-A's /workspace/ are NOT visible "
+                "from machine-B.  Writing to the wrong container is "
+                "common; the build fails with error_kind='context_invalid' "
+                "or error_kind='dockerfile_missing' when contexts don't "
+                "overlap.  Defaults: dockerfile=/workspace/Dockerfile, "
+                "context_dir=/workspace.  Inline dockerfile_content is "
+                "not supported (see docker_backend.build docstring for "
+                "rationale)."
             ),
             "required": {"image_tag": "string", "machine": "string"},
             "optional": {
@@ -242,12 +253,20 @@ DOCKER_HELP_RESPONSE = {
             },
             "returns": {
                 "image_tag": "string",
+                "machine": "string",
                 "status": "built | error",
+                "error_kind": (
+                    "string — only present when status='error'.  One of: "
+                    "bad_path (path outside /workspace/), "
+                    "context_invalid (context_dir not a directory on host), "
+                    "dockerfile_missing (daemon can't open the Dockerfile), "
+                    "base_image_not_found (FROM <image> can't be pulled), "
+                    "build_failed (syntax error, RUN failure, etc.)."
+                ),
                 "error": (
-                    "string — only present when status='error'.  Includes a "
-                    "hint when the docker SDK's internal 'path is not a "
-                    "directory' check fires, pointing to context_dir / "
-                    "dockerfile as the likely cause."
+                    "string — only present when status='error'.  Prefixed "
+                    "with [machine=...] to help diagnose cross-container "
+                    "mixing.  Includes daemon build log tail when available."
                 ),
             },
         },
@@ -650,10 +669,19 @@ class SandboxEnv:
         written into a sandboxed container's ``/workspace/`` via
         :func:`sandbox_file_write`.
 
-        ``dockerfile`` and ``context_dir`` must be under ``/workspace/``;
-        host paths are rejected at the sandbox boundary.  Inline mode
-        (``dockerfile_content``) is not supported — see the backend
-        docstring for the security rationale.
+        ``dockerfile`` and ``context_dir`` must be CONTAINER paths under
+        ``/workspace/``, NOT host paths — ``/workspace/`` is the only
+        bind-mount from the host, so other container paths (e.g.
+        ``/etc/foo``) live in the container's overlay FS and the daemon
+        cannot read them.  Inline mode (``dockerfile_content``) is NOT
+        supported — see the backend docstring for the security rationale.
+
+        Returns ``error_kind`` to help the agent classify the failure:
+        ``bad_path`` (non-/workspace path), ``context_invalid`` (context
+        dir not found — probably wrote to a different machine),
+        ``dockerfile_missing`` (the daemon couldn't open the Dockerfile),
+        ``base_image_not_found`` (FROM <image> resolution failed),
+        or ``build_failed`` (Dockerfile syntax, RUN error, etc.).
         """
         err = self._require(params, "image_tag")
         if err is not None:

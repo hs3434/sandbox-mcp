@@ -351,21 +351,21 @@ agent 无法把宿主路径走私进容器:
 #### 容器间共享目录
 
 每次 `docker_run` 都会自动 bind-mount `work_home/<share_subdir>/`
-(默认 `_share/`) 到容器内的 `/workspace/share/`。挂载规格固定为两
+(默认 `_share/`) 到容器内的 `/share/`。挂载规格固定为两
 条 bind,跟 peer 数量无关:
 
-1. 整个 share 根目录以 **ro** 挂到 `/workspace/share/`
+1. 整个 share 根目录以 **ro** 挂到 `/share/`
 2. 容器自己的子目录 `work_home/_share/<machine>/` 以 **rw** 覆盖到
-   `/workspace/share/<machine>/` —— agent 可以写自己的产物,但 ro
+   `/share/<machine>/` —— agent 可以写自己的产物,但 ro
    父挂载会阻止对任何 peer 子目录的写(内核 mount flag 强制)
 
 约定:
 
 ```text
 # 在 "dev" 容器内:
-echo "build output" > /workspace/share/dev/result.txt       # self rw
-cat /workspace/share/alice/notes.md                         # peer ro (经父挂载)
-ls /workspace/share/                                        # 发现 peer
+echo "build output" > /share/dev/result.txt       # self rw
+cat /share/alice/notes.md                         # peer ro (经父挂载)
+ls /share/                                        # 发现 peer
 ```
 
 **新 peer 自动可见**。因为父挂载覆盖整个 `_share/` 树,内核在访问时
@@ -394,8 +394,8 @@ docker 或 gVisor (`runsc`) 等更强的隔离手段来堵。
 | 容器内挂载点              | 宿主源路径                          | 模式 |
 |---------------------------|-------------------------------------|------|
 | `/workspace`              | `work_home/<name>/`                 | rw   |
-| `/workspace/share`        | `work_home/_share/`                 | ro   |
-| `/workspace/share/<self>` | `work_home/_share/<self>/`          | rw   |
+| `/share`        | `work_home/_share/`                 | ro   |
+| `/share/<self>` | `work_home/_share/<self>/`          | rw   |
 
 Admin mount 布局(当 `name == admin_machine`):
 
@@ -404,7 +404,7 @@ Admin mount 布局(当 `name == admin_machine`):
   | `/workspace` | `work_home/admin/`      | rw   | admin 自己的 scratch |
   | `/host`      | `work_home/` (整棵)     | rw   | 全局视图:所有 peer + share |
 
-  跳过 share bindings(`/workspace/share/*`)——全局 `/host` 挂载已覆盖 `work_home/_share/`。
+  跳过 share bindings(`/share/*`)——全局 `/host` 挂载已覆盖 `work_home/_share/`。
 
 **约定:**
 

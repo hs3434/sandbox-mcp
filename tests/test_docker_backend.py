@@ -67,8 +67,8 @@ def test_docker_create(docker_backend, mock_client, tmp_path, monkeypatch):
     """End-to-end create() with no special params.
 
     Three auto mounts: ``work_home/dev`` → ``/workspace`` (workspace),
-    ``work_home/_share`` → ``/workspace/share`` (share root, ro), and
-    ``work_home/_share/dev`` → ``/workspace/share/dev`` (self overlay,
+    ``work_home/_share`` → ``/share`` (share root, ro), and
+    ``work_home/_share/dev`` → ``/share/dev`` (self overlay,
     rw).  No agent-supplied host paths leak through (security boundary).
     """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
@@ -89,8 +89,8 @@ def test_docker_create(docker_backend, mock_client, tmp_path, monkeypatch):
     bind_targets = {m["bind"] for m in mounts.values()}
     assert bind_targets == {
         "/workspace",
-        "/workspace/share",
-        "/workspace/share/dev",
+        "/share",
+        "/share/dev",
     }, bind_targets
     labels = run_kwargs.get("labels") or {}
     assert labels.get("sandbox-mcp.managed") == "true"
@@ -153,13 +153,13 @@ def test_docker_create_share_uses_two_mounts_not_per_peer(docker_backend, mock_c
 
     docker_backend.create(name="dev", purpose="t", image="alpine:3")
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
-    share_mounts = [m for m in mounts.values() if m["bind"].startswith("/workspace/share")]
+    share_mounts = [m for m in mounts.values() if m["bind"].startswith("/share")]
     assert len(share_mounts) == 2, (
         f"expected parent ro + self overlay, got {len(share_mounts)} mounts: {share_mounts}"
     )
-    parent = next(m for m in share_mounts if m["bind"] == "/workspace/share")
+    parent = next(m for m in share_mounts if m["bind"] == "/share")
     assert parent["mode"] == "ro", parent
-    overlay = next(m for m in share_mounts if m["bind"] == "/workspace/share/dev")
+    overlay = next(m for m in share_mounts if m["bind"] == "/share/dev")
     assert overlay["mode"] == "rw", overlay
 
 
@@ -186,7 +186,7 @@ def test_docker_create_share_disabled_when_subdir_empty(docker_backend, mock_cli
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
     bind_targets = {m["bind"] for m in mounts.values()}
     assert "/workspace" in bind_targets
-    assert not any(b.startswith("/workspace/share/") for b in bind_targets), bind_targets
+    assert not any(b.startswith("/share/") for b in bind_targets), bind_targets
 
 
 def test_docker_create_share_sees_existing_peers_through_parent(
@@ -203,9 +203,9 @@ def test_docker_create_share_sees_existing_peers_through_parent(
     docker_backend.create(name="dev", purpose="t", image="alpine:3")
     mounts = mock_client.containers.run.call_args.kwargs["volumes"]
     bind_targets = {m["bind"] for m in mounts.values()}
-    # alice/ is NOT an explicit bind — it surfaces through /workspace/share/.
-    assert "/workspace/share/alice" not in bind_targets, bind_targets
-    assert "/workspace/share" in bind_targets
+    # alice/ is NOT an explicit bind — it surfaces through /share/.
+    assert "/share/alice" not in bind_targets, bind_targets
+    assert "/share" in bind_targets
 
 
 # ---- admin machine --------------------------------------------------------
@@ -224,8 +224,8 @@ def test_docker_create_admin_uses_own_and_host_mounts(docker_backend, mock_clien
     assert bind_targets == {"/workspace", "/host"}, bind_targets
     # Both mounts must be rw.
     assert all(m["mode"] == "rw" for m in mounts.values()), mounts
-    # No /workspace/share mount for admin (covered by /host).
-    assert not any(b.startswith("/workspace/share") for b in bind_targets), bind_targets
+    # No /share mount for admin (covered by /host).
+    assert not any(b.startswith("/share") for b in bind_targets), bind_targets
 
 
 def test_docker_create_admin_skips_share_dir_creation(docker_backend, mock_client, tmp_path):
@@ -252,8 +252,8 @@ def test_docker_create_admin_disabled_when_admin_machine_empty(
     # Peer-style mount layout: workspace + share parent + share overlay.
     assert bind_targets == {
         "/workspace",
-        "/workspace/share",
-        "/workspace/share/admin",
+        "/share",
+        "/share/admin",
     }, bind_targets
     assert "/host" not in bind_targets, bind_targets
 
@@ -956,7 +956,7 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
         "HostConfig": {"RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}},
         "Mounts": [
             {"Source": "/host/x", "Destination": "/workspace", "Mode": "rw"},
-            {"Source": "/host/share", "Destination": "/workspace/share", "Mode": "ro"},
+            {"Source": "/host/share", "Destination": "/share", "Mode": "ro"},
         ],
     }
     container.short_id = "abc123def456"
@@ -978,7 +978,7 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
     assert result["entrypoint"] is None
     assert result["mounts"] == [
         {"source": "/host/x", "destination": "/workspace", "mode": "rw"},
-        {"source": "/host/share", "destination": "/workspace/share", "mode": "ro"},
+        {"source": "/host/share", "destination": "/share", "mode": "ro"},
     ]
     assert result["labels"]["sandbox-mcp.purpose"] == "Python dev"
     assert result["restart_policy"] == {"name": "unless-stopped", "max_retry": 0}

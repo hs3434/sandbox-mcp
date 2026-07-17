@@ -67,7 +67,7 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
         "HostConfig": {"RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}},
         "Mounts": [
             {"Source": "/host/x", "Destination": "/workspace", "Mode": "rw"},
-            {"Source": "/host/share", "Destination": "/workspace/share", "Mode": "ro"},
+            {"Source": "/host/share", "Destination": "/share", "Mode": "ro"},
         ],
     }
     container.short_id = "abc123def456"
@@ -89,7 +89,7 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
     assert result["entrypoint"] is None
     assert result["mounts"] == [
         {"source": "/host/x", "destination": "/workspace", "mode": "rw"},
-        {"source": "/host/share", "destination": "/workspace/share", "mode": "ro"},
+        {"source": "/host/share", "destination": "/share", "mode": "ro"},
     ]
     assert result["labels"]["sandbox-mcp.purpose"] == "Python dev"
     assert result["restart_policy"] == {"name": "unless-stopped", "max_retry": 0}

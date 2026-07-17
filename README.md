@@ -373,13 +373,13 @@ container:
 #### Inter-container share directory
 
 Every `docker_run` automatically bind-mounts `work_home/<share_subdir>/`
-(default `_share/`) into the container at `/workspace/share/`.  The
+(default `_share/`) into the container at `/share/`.  The
 mount spec is fixed at two bind mounts, regardless of how many peer
 containers exist:
 
-1. The whole share root is mounted **read-only** at `/workspace/share/`.
+1. The whole share root is mounted **read-only** at `/share/`.
 2. The container's own subdirectory `work_home/_share/<machine>/` is
-   overlaid **read-write** at `/workspace/share/<machine>/` — the
+   overlaid **read-write** at `/share/<machine>/` — the
    agent can drop its own output, but the ro parent mount still blocks
    writes to any peer subdirectory (kernel-enforced mount flag).
 
@@ -387,9 +387,9 @@ Convention:
 
 ```text
 # inside the "dev" container:
-echo "build output" > /workspace/share/dev/result.txt       # self rw
-cat /workspace/share/alice/notes.md                         # peer ro (via parent ro)
-ls /workspace/share/                                        # discover peers
+echo "build output" > /share/dev/result.txt       # self rw
+cat /share/alice/notes.md                         # peer ro (via parent ro)
+ls /share/                                        # discover peers
 ```
 
 **New peers appear automatically.** Because the parent mount covers
@@ -426,8 +426,8 @@ Default mount layout (peer container):
 | Container mount | Source (host)                      | Mode |
 |-----------------|------------------------------------|------|
 | `/workspace`    | `work_home/<name>/`                | rw   |
-| `/workspace/share` | `work_home/_share/`             | ro   |
-| `/workspace/share/<self>` | `work_home/_share/<self>/` | rw   |
+| `/share` | `work_home/_share/`             | ro   |
+| `/share/<self>` | `work_home/_share/<self>/` | rw   |
 
 Admin mount layout (when `name == admin_machine`):
 
@@ -436,7 +436,7 @@ Admin mount layout (when `name == admin_machine`):
 | `/workspace`    | `work_home/admin/`             | rw   | own scratch |
 | `/host`         | `work_home/` (whole tree)      | rw   | global view: every peer + share |
 
-  Share bindings (`/workspace/share/*`) are skipped because the
+  Share bindings (`/share/*`) are skipped because the
   global `/host` mount already covers `work_home/_share/`.
 
 **Convention:**
