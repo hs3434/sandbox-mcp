@@ -17,7 +17,4 @@ RUN pip install --no-cache-dir ${PIP_EXTRA_ARGS} .
 ENV HOME=/home/sandbox
 RUN mkdir -p /home/sandbox/.sandbox-mcp
 
-EXPOSE 8010
-
 ENTRYPOINT ["sandbox-mcp-http"]
-CMD ["--host", "0.0.0.0", "--port", "8010"]

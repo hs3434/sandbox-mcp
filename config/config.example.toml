@@ -161,7 +161,7 @@ default_search_limit = 50
 # This section holds only the trigger.  Backend-specific params live in
 # their own sections: docker image = [docker] default_image; SSH target
 # = [ssh] default_host / default_user / default_port / default_key.
-enabled = false
+enabled = true
 backend = "docker"       # "docker" or "ssh"
 # Defaults to "admin" so enabling [default_machine] without naming a
 # machine provisions the admin container (see [docker] admin_machine).
