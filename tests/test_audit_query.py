@@ -507,6 +507,7 @@ def test_handler_no_caching_sees_new_records(monkeypatch, tmp_path):
 
 # ---------- e2e: tool call actually writes to the audit DB ----------
 
+
 def test_tool_call_writes_to_audit_db(monkeypatch, tmp_path):
     """End-to-end: call_tool → audit.record → real SQLite row.
 
@@ -523,9 +524,7 @@ def test_tool_call_writes_to_audit_db(monkeypatch, tmp_path):
     srv.call_tool("env", {"action": "docker_ps"})
 
     with sqlite3.connect(str(db)) as conn:
-        rows = conn.execute(
-            "SELECT machine, action, status FROM audit ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT machine, action, status FROM audit ORDER BY id").fetchall()
 
     assert len(rows) == 1, f"expected 1 audit row, got {rows!r}"
     assert rows[0][1] == "docker_ps"
@@ -546,9 +545,7 @@ def test_each_tool_call_writes_a_row(monkeypatch, tmp_path):
         srv.call_tool("env", {"action": action})
 
     with sqlite3.connect(str(db)) as conn:
-        actions = [r[0] for r in conn.execute(
-            "SELECT action FROM audit ORDER BY id"
-        ).fetchall()]
+        actions = [r[0] for r in conn.execute("SELECT action FROM audit ORDER BY id").fetchall()]
 
     assert actions == ["docker_ps", "status", "docker_ps"]
 
@@ -571,6 +568,7 @@ def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
 
 
 # ---------- regression: import-snapshot stale DEFAULT_AUDIT_LOGGER ----------
+
 
 def test_sandbox_server_audit_not_stale_after_reset(monkeypatch):
     """Regression: SandboxServer.audit must not hold a stale reference to

@@ -24,20 +24,10 @@ catches the same things CI does.  Run individually with:
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _ruff_available() -> bool:
-    return shutil.which("ruff") is not None
-
-
-pytestmark = pytest.mark.skipif(not _ruff_available(), reason="ruff not on PATH")
 
 
 def test_ruff_format_check():
