@@ -84,8 +84,8 @@ host = "0.0.0.0"
 port = 8010
 transport = "streamable-http"
 
-[storage]               # 持久化 workspace 目录
-work_home = "~/.sandbox-mcp/workspaces/"
+[storage]               # 持久化 workspace 目录（必须是主机的绝对路径）
+work_home = "/var/lib/sandbox-mcp"   # 不要用 ~ — 原样传给 Docker daemon
 
 [audit]                 # SQLite 审计日志（每次工具调用一行）
 log_path = "~/.sandbox-mcp/audit.db"

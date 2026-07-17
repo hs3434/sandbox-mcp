@@ -54,7 +54,7 @@ def test_load_defaults_when_no_file(monkeypatch, tmp_path):
     assert cfg.shell == ShellConfig()
     assert cfg.files == FilesConfig()
     assert cfg.default_machine == DefaultMachineConfig()
-    assert cfg.storage.work_home == (Path.home() / ".sandbox-mcp" / "workspaces").resolve()
+    assert cfg.storage.work_home == Path("/var/lib/sandbox-mcp")
 
 
 def test_load_from_toml(monkeypatch, tmp_path):
@@ -129,21 +129,46 @@ def test_get_work_dir_returns_path(monkeypatch, tmp_path):
 
 
 def test_get_work_home_default(monkeypatch):
-    assert get_work_home() == (Path.home() / ".sandbox-mcp" / "workspaces").resolve()
+    assert get_work_home() == Path("/var/lib/sandbox-mcp")
 
 
 def test_get_work_dir_uses_env_override(monkeypatch, tmp_path):
     host_dir = tmp_path / "host-ws"
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(host_dir))
     wd = get_work_dir("mybox")
-    assert wd == host_dir.resolve() / "mybox"
+    assert wd == host_dir / "mybox"
     assert not wd.exists()
 
 
-def test_storage_work_home_expands_tilde(monkeypatch):
+def test_storage_work_home_rejects_tilde(monkeypatch):
+    """'~' in work_home is rejected: the path is consumed by the Docker
+    daemon (which runs in a different process / machine / container context
+    than sandbox-mcp) and never expands '~'.  Even when daemon and
+    sandbox-mcp share a host, '~' expands to sandbox-mcp's HOME at
+    config-load time, which is almost never what the operator typed in
+    their interactive shell.  Force absolute paths.
+    """
     monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", "~/custom-workspaces/")
+    with pytest.raises(ValueError, match="absolute HOST path"):
+        load()
+
+
+def test_storage_work_home_rejects_relative(monkeypatch):
+    """Relative paths are rejected: the daemon resolves them relative to
+    its own CWD, which is not what the operator meant.
+    """
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", "workspaces/")
+    with pytest.raises(ValueError, match="absolute"):
+        load()
+
+
+def test_storage_work_home_accepts_absolute(monkeypatch, tmp_path):
+    """Absolute paths pass through untouched (no expanduser, no resolve)."""
+    monkeypatch.setenv("SANDBOX_MCP_STORAGE_WORK_HOME", str(tmp_path))
     cfg = load()
-    assert cfg.storage.work_home == (Path.home() / "custom-workspaces").resolve()
+    assert cfg.storage.work_home == Path(str(tmp_path))
+    # Crucially: NOT resolved relative to sandbox-mcp's CWD.
+    assert cfg.storage.work_home.is_absolute()
 
 
 def test_repo_example_matches_dataclass_defaults():
@@ -168,11 +193,10 @@ def test_repo_example_matches_dataclass_defaults():
         section_dict: dict[str, object] = {}
         for f in fields(section_obj):
             value = getattr(section_obj, f.name)
-            # StorageConfig.work_home is resolved to an absolute Path at
-            # __post_init__ time; the example file ships the un-resolved
-            # "~/.sandbox-mcp/workspaces/" form for portability.
+            # StorageConfig.work_home default is an absolute path; the
+            # example file ships the same absolute value verbatim.
             if section_name == "storage" and f.name == "work_home":
-                value = "~/.sandbox-mcp/workspaces/"
+                value = "/var/lib/sandbox-mcp"
             section_dict[f.name] = value
         expected[section_name] = section_dict
 

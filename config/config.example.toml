@@ -34,11 +34,17 @@ auto_generate_if_empty = true
 # Docker daemon to bind-mount work_home/dev/ to /workspace inside the
 # container.  The daemon auto-creates the directory if it doesn't exist.
 #
-# When running sandbox-mcp inside a container (Docker socket mount), set
-# this to the HOST-side path -- the Docker daemon resolves it on the host,
-# not inside the container.
+# MUST be an absolute HOST-side path.  sandbox-mcp passes this string
+# verbatim to the Docker daemon as a bind-mount source, and the daemon
+# may run in a different process / container / machine than sandbox-mcp
+# (TCP, SSH, or remote DOCKER_HOST transports — see [docker] host).
+# Neither '~' expansion nor .resolve() happens here — both are relative
+# to sandbox-mcp's process context, not the daemon's.  In container
+# deployments, this is the path on the HOST (not inside sandbox-mcp's
+# container).
+#
 # Overridable via $SANDBOX_MCP_STORAGE_WORK_HOME.
-work_home = "~/.sandbox-mcp/workspaces/"
+work_home = "/var/lib/sandbox-mcp"
 
 # Sub-directory under work_home used as the inter-container shared
 # workspace (see docs/sandbox-boundary.md).  Every docker_run auto-

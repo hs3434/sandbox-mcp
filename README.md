@@ -89,8 +89,8 @@ host = "0.0.0.0"
 port = 8010
 transport = "streamable-http"
 
-[storage]               # persistent workspace directory
-work_home = "~/.sandbox-mcp/workspaces/"
+[storage]               # persistent workspace directory (MUST be an absolute HOST path)
+work_home = "/var/lib/sandbox-mcp"   # no '~' — passed verbatim to the Docker daemon
 
 [audit]                 # SQLite audit log (one row per tool call)
 log_path = "~/.sandbox-mcp/audit.db"

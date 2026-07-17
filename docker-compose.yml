@@ -40,9 +40,11 @@
 # Workspace path note
 # -------------------
 # sandbox-mcp runs inside this container but manages Docker containers via the
-# HOST Docker daemon (socket mount).  Set ``work_home`` in config.toml to the
-# HOST-side path -- the Docker daemon resolves it on the host and auto-creates
-# subdirectories as needed, so no workspace volume mount is required here.
+# HOST Docker daemon (socket mount).  Set ``work_home`` in config.toml to an
+# absolute HOST-side path -- the Docker daemon resolves it on the host and
+# auto-creates subdirectories as needed, so no workspace volume mount is
+# required here.  ``~`` is NOT expanded (sandbox-mcp refuses paths starting
+# with ``~`` — see ``storage.work_home`` in config.example.toml).
 
 services:
   sandbox-mcp:

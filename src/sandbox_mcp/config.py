@@ -63,7 +63,17 @@ class ServerConfig:
 
 @dataclass(frozen=True)
 class StorageConfig:
-    work_home: Path = field(default_factory=lambda: Path.home() / ".sandbox-mcp" / "workspaces")
+    # Root directory for per-machine persistent workspaces.  MUST be an
+    # absolute HOST-side path: sandbox-mcp passes this string verbatim
+    # to the Docker daemon as a bind-mount source, and the daemon may
+    # run in a completely different process / container / machine than
+    # sandbox-mcp (TCP, SSH, or remote-DOCKER_HOST transports — see
+    # ``[docker] host``).  Neither ``~`` expansion nor ``.resolve()``
+    # happens here, because both are relative to *sandbox-mcp's*
+    # process context, not the daemon's.  Default: ``/var/lib/sandbox-mcp``
+    # (FHS-style; daemon auto-creates ``<work_home>/<machine>/`` on
+    # bind-mount).
+    work_home: Path = field(default_factory=lambda: Path("/var/lib/sandbox-mcp"))
     # Sub-directory under work_home used as the inter-container shared
     # workspace.  Every container bind-mounts ``work_home/<share_subdir>/<self>/``
     # rw into ``/share/<self>/``, plus every other peer subdirectory
@@ -73,8 +83,25 @@ class StorageConfig:
     share_subdir: str = "_share"
 
     def __post_init__(self) -> None:
-        # Resolve ~ eagerly so callers always get an absolute path.
-        object.__setattr__(self, "work_home", Path(self.work_home).expanduser().resolve())
+        raw = str(self.work_home)
+        if raw.startswith("~"):
+            raise ValueError(
+                f"storage.work_home must be an absolute HOST path; got {raw!r}. "
+                f"The tilde '~' expands relative to sandbox-mcp's process HOME, "
+                f"but the Docker daemon may run in a different process, container, "
+                f"or machine (TCP/SSH transport — see [docker] host) and does not "
+                f"share sandbox-mcp's HOME. Even on a single host, '~' here is "
+                f"sandbox-mcp's HOME at config-load time, not the operator's "
+                f"interactive shell HOME. Pass an absolute path like "
+                f"'/var/lib/sandbox-mcp' instead."
+            )
+        if not raw.startswith("/"):
+            raise ValueError(
+                f"storage.work_home must be an absolute path (start with '/'); "
+                f"got {raw!r}. Relative paths resolve against the daemon's CWD, "
+                f"which is rarely what was intended."
+            )
+        object.__setattr__(self, "work_home", Path(raw))
 
 
 @dataclass(frozen=True)
