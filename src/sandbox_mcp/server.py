@@ -59,6 +59,11 @@ from sandbox_mcp.audit import (
     query_audit,
     reset_default_logger,
 )
+from sandbox_mcp.auth import (
+    generate_ephemeral_token,
+    load_auth_tokens,
+    resolve_tokens_file,
+)
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
 from sandbox_mcp.config import load as _load_config
@@ -636,12 +641,6 @@ def main_http(argv: list[str] | None = None):
     """
     import sys
 
-    from sandbox_mcp.auth import (
-        generate_ephemeral_token,
-        load_auth_tokens,
-        resolve_tokens_file,
-    )
-
     args = _build_arg_parser(
         prog="sandbox-mcp-http",
         with_http=True,
@@ -788,8 +787,6 @@ class BearerAuthMiddleware:
             return
 
         # Re-read tokens from file on every request (hot-reload).
-        from sandbox_mcp.auth import load_auth_tokens
-
         tokens = load_auth_tokens(self.tokens_file)
         if not any(secrets.compare_digest(presented, t) for t in tokens):
             await _send_401(send, "invalid token")
