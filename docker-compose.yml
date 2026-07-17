@@ -19,6 +19,10 @@
 #        cat > .env <<EOF
 #        SANDBOX_MCP_PORT=8010                    # port used on BOTH host and container
 #        DOCKER_SOCK_PATH=/var/run/docker.sock    # host docker socket path
+#        WORK_HOME=/var/lib/sandbox-mcp           # MUST match [storage] work_home
+#                                                # in config.toml; required for
+#                                                # docker_build (SDK tar-walks the
+#                                                # context inside this container)
 #        EOF
 #
 #   4. Start the service:
