@@ -182,10 +182,19 @@ Behaviour:
   the requested name already exists, it reattaches (starting it if stopped)
   rather than erroring on the name conflict. The response carries a `note`
   ("reattached to existing container ...") so the agent knows it was a reuse.
-- `start()` / reattach **verify the container is actually running**. A
-  container whose command crashes exits within milliseconds; instead of
-  falsely reporting "running", sandbox-mcp returns `status="error"` with a
-  diagnostic (state, exit code, and a short log tail).
+- `docker_run` no longer overrides the image's CMD. The container runs with
+  whatever CMD/ENTRYPOINT the image author chose — `postgres:16` actually
+  starts postgres, `redis:7` actually starts redis, etc. To run a generic
+  image as an exec-only sandbox, build your own image with `CMD sleep infinity`,
+  or any long-lived shell, and `docker_run` against that.
+- `docker_run` accepts an optional `shell` parameter (default `"bash"`) for
+  the binary used by `docker exec` into this machine. Set it to e.g.
+  `/bin/sh` for alpine / distroless / busybox images that don't ship bash.
+- `start()` / reattach catch **fast-crashing** containers (CMD exits within
+  milliseconds of start) by reloading state immediately after the start
+  request returns. A container that crashes a moment later may briefly
+  report `"running"` before transitioning to `"exited"` — for robust
+  liveness, poll `docker_inspect` yourself with an appropriate delay.
 
 
 ### Register with Hermes
@@ -256,7 +265,7 @@ different machine or is managed as a systemd service.
 | Discovery | `help`, `status` |
 | General | `machine_list`, `default_set` |
 | Shell | `shell_new`, `shell_list`, `shell_remove` |
-| Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_ps`, `docker_images` |
+| Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_restart`, `docker_ps`, `docker_images`, `docker_image_history`, `docker_inspect`, `docker_logs`, `docker_diff`, `docker_stats` |
 | SSH | `ssh_connect`, `ssh_disconnect`, `ssh_reconnect`, `ssh_remove` |
 
 `docker_run` is idempotent: if a container with the same name already exists
@@ -316,6 +325,31 @@ outside its assigned `work_home/<machine>/`.
 > agent has to commit its Dockerfile to disk via `sandbox_file_write`
 > first, which keeps every line auditable and the build context under
 > `work_home`.
+
+### Inspecting images and containers
+
+```python
+# Container view: state, cmd, entrypoint, mounts, labels, restart policy.
+# Env values are deliberately omitted (use shell_exec env/pwd/whoami).
+sandbox_env(action="docker_inspect", machine="dev")
+
+# Image view: identity, tags, size, cmd/entrypoint, env KEYS (values redacted),
+# exposed ports, declared volumes. Pass any image ref — name:tag, short id, full id.
+sandbox_env(action="docker_inspect", machine="python:3.12", kind="image")
+sandbox_env(action="docker_inspect", machine="sha256:abc123def456", kind="image")
+
+# Layer-by-layer build history for a single image (mirrors `docker history`).
+# Use this when you need ONE image's provenance; use docker_images to enumerate.
+sandbox_env(action="docker_image_history", image="python:3.12")
+# Returns: {image, layers: [{id (12-hex), created, created_by, size_bytes, tags}], total_size_bytes, layer_count}
+```
+
+`docker_inspect` (container view), `docker_logs`, `docker_diff`, `docker_stats`,
+`docker_restart` all operate on a **managed machine** (`docker_run`-created
+container). `docker_inspect` with `kind="image"` is the exception: it takes an
+image ref directly and never touches the registry. `docker_logs` and
+`docker_diff` are container-only — images have no log stream and no overlay
+filesystem to diff against; for image provenance, use `docker_image_history`.
 
 ### `docker_run` Sandbox Boundary
 

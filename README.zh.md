@@ -170,9 +170,17 @@ name = "dev"
 - `docker_run` 现在**会话内幂等**：若同名容器已存在，会重新挂载（已停止则
   启动），而不是因名字冲突报错。响应里带 `note`（"reattached to existing
   container ..."），让 agent 知道这是复用而非新建。
-- `start()` / 重新挂载会**验证容器是否真的在运行**。容器命令崩溃会在毫秒级
-  退出；此时不会谎报 "running"，而是返回 `status="error"` 并附诊断（状态、
-  退出码、日志尾部）。
+- `docker_run` 不再覆盖镜像自带的 CMD。容器按镜像作者设定的 CMD / ENTRYPOINT
+  运行——`postgres:16` 真的会启动 postgres，`redis:7` 真的会启动 redis，
+  等等。想用普通镜像做纯 exec 沙箱，自己 build 一个 `CMD sleep infinity`
+  （或任何常驻 shell）的镜像，再对那个镜像 `docker_run`。
+- `docker_run` 接受可选的 `shell` 参数（默认 `"bash"`），控制 `docker exec`
+  进去时用的二进制。alpine / distroless / busybox 等没带 bash 的镜像，
+  设成 `/bin/sh` 之类的即可。
+- `start()` / 重新挂载能抓到**快速崩溃**的容器（CMD 在启动后毫秒级退出），
+  方法是 start 请求返回后立即 reload state。如果容器在一段时间后才崩溃，
+  可能会短暂报 `"running"`，随后才转到 `"exited"`——需要稳健存活检测的话，
+  自己用 `docker_inspect` 轮询并加合适延迟。
 
 
 ### 注册到 Hermes
@@ -243,7 +251,7 @@ Hermes 连到 HTTP MCP 端点（`/mcp`，即 MCP 规范当前的 "Streamable HTT
 | Discovery | `help`, `status` |
 | General | `machine_list`, `default_set` |
 | Shell | `shell_new`, `shell_list`, `shell_remove` |
-| Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_ps`, `docker_images` |
+| Docker | `docker_run`, `docker_build`, `docker_commit`, `docker_stop`, `docker_start`, `docker_remove`, `docker_restart`, `docker_ps`, `docker_images`, `docker_image_history`, `docker_inspect`, `docker_logs`, `docker_diff`, `docker_stats` |
 | SSH | `ssh_connect`, `ssh_disconnect`, `ssh_reconnect`, `ssh_remove` |
 
 `docker_run` 是幂等的：如果同名容器已经存在（比如 MCP 重启后），
@@ -298,6 +306,31 @@ sandbox_env(action="docker_build",
 > 步骤以宿主内核全能力执行(BuildKit `--mount=type=bind,source=/,...`)。
 > 强制要求 agent 先用 `sandbox_file_write` 把 Dockerfile 落到磁盘,
 > 保证每行可审计、build context 留在 `work_home` 内。
+
+### 检查镜像和容器
+
+```python
+# 容器视图:状态、cmd、entrypoint、挂载、labels、重启策略。
+# Env 值故意省略(用 shell_exec env/pwd/whoami 拿运行时 env)。
+sandbox_env(action="docker_inspect", machine="dev")
+
+# 镜像视图:身份、tags、大小、cmd/entrypoint、env KEYS(值脱敏)、
+# 暴露端口、声明的卷、labels、working_dir、user。
+# 接受任意镜像引用:name:tag、short id、full id。
+sandbox_env(action="docker_inspect", machine="python:3.12", kind="image")
+sandbox_env(action="docker_inspect", machine="sha256:abc123def456", kind="image")
+
+# 单个镜像的 layer-by-layer 构建历史(对应 `docker history`)。
+# 查单个镜像的来历用这个;枚举多个镜像用 docker_images。
+sandbox_env(action="docker_image_history", image="python:3.12")
+# 返回:{image, layers: [{id (12-hex), created, created_by, size_bytes, tags}], total_size_bytes, layer_count}
+```
+
+`docker_inspect`(容器视图)、`docker_logs`、`docker_diff`、`docker_stats`、
+`docker_restart` 都操作**托管机器**(`docker_run` 创建的容器)。
+`docker_inspect` 配 `kind="image"` 是唯一的例外:它直接接受镜像引用,完全
+不碰 registry。`docker_logs` 和 `docker_diff` 严格 container-only——镜像没有
+日志流,也没有 overlay 文件系统可 diff;想查镜像来历,用 `docker_image_history`。
 
 ### `docker_run` 沙箱边界
 
