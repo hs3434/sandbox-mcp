@@ -86,7 +86,8 @@ HELP_RESPONSE = {
     ],
     "more_help": {
         "docker_help": (
-            "Discover Docker machine actions: run/build/commit/stop/start/remove/ps/images"
+            "Discover Docker machine actions: run/build/commit/stop/start/"
+            "restart/remove/ps/images/image_history/inspect/logs/diff/stats"
         ),
         "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
     },
@@ -107,6 +108,12 @@ DOCKER_HELP_RESPONSE = {
                 "if a container with the same name already exists "
                 "(e.g. after an MCP restart), the call attaches to "
                 "it instead of creating a new one. "
+                "**Does not override the image's CMD/ENTRYPOINT** — the "
+                "container runs whatever the image author specified. "
+                "postgres / redis / jupyter / etc. start as real services; "
+                "to run a generic image as an exec-only sandbox, use one "
+                "with a long-lived CMD (e.g. your own image based on "
+                "ubuntu with ``CMD sleep infinity``). "
                 "Networking: every container joins a shared user-defined "
                 "bridge (default `sandbox-mcp`, configurable via "
                 "[docker] auto_network); sibling containers reach each "
@@ -147,7 +154,17 @@ DOCKER_HELP_RESPONSE = {
                     "one-off command execution (file ops, healthchecks)."
                 ),
             },
-            "returns": {"name": "string", "status": "running", "backend": "docker"},
+            "returns": {
+                "name": "string",
+                "status": "running | error",
+                "backend": "docker",
+                "note": (
+                    "string — only present on 409 reattach (explains reuse, "
+                    "purpose-mismatch, etc). On fresh creates and errors the "
+                    "field is absent."
+                ),
+                "error": "string — only present when status='error'",
+            },
             "example": {"name": "dev", "image": "python:3.12", "purpose": "Python dev"},
         },
         {
@@ -218,7 +235,16 @@ DOCKER_HELP_RESPONSE = {
                 "dockerfile": "string — default /workspace/Dockerfile",
                 "context_dir": "string — default /workspace",
             },
-            "returns": {"image_tag": "string", "status": "built"},
+            "returns": {
+                "image_tag": "string",
+                "status": "built | error",
+                "error": (
+                    "string — only present when status='error'.  Includes a "
+                    "hint when the docker SDK's internal 'path is not a "
+                    "directory' check fires, pointing to context_dir / "
+                    "dockerfile as the likely cause."
+                ),
+            },
         },
         {
             "action": "docker_commit",
@@ -229,13 +255,21 @@ DOCKER_HELP_RESPONSE = {
                 "machines commit."
             ),
             "required": {"machine": "string", "image_tag": "string"},
-            "returns": {"image_tag": "string", "status": "committed"},
+            "returns": {
+                "image_tag": "string",
+                "status": "committed | error",
+                "error": "string — only present when status='error'",
+            },
         },
         {
             "action": "docker_stop",
             "description": ("Stop container. State preserved, can docker_start to resume."),
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "stopped"},
+            "returns": {
+                "machine": "string",
+                "status": "stopped | error",
+                "error": "string — only present when status='error'",
+            },
         },
         {
             "action": "docker_start",
@@ -248,13 +282,21 @@ DOCKER_HELP_RESPONSE = {
                 "subsequent calls to docker_inspect with a delay."
             ),
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "running"},
+            "returns": {
+                "machine": "string",
+                "status": "running | error",
+                "error": "string — diagnostic with state/exit_code/log tail (on failure)",
+            },
         },
         {
             "action": "docker_remove",
             "description": ("Stop and remove container. Closes all shells for the machine."),
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "removed"},
+            "returns": {
+                "machine": "string",
+                "status": "removed | error",
+                "error": "string — only present when status='error'",
+            },
         },
         {
             "action": "docker_inspect",
@@ -281,18 +323,36 @@ DOCKER_HELP_RESPONSE = {
                 "raw": "bool — default false",
             },
             "returns": {
-                "id": "string",
-                "name": "string",
-                "image": "string",
-                "created": "string (ISO 8601)",
-                "started_at": "string (ISO 8601)",
-                "finished_at": "string (ISO 8601)",
-                "state": "object",
-                "cmd": "list|null",
-                "entrypoint": "list|null",
-                "mounts": "list",
-                "labels": "object",
-                "restart_policy": "object",
+                "container view (default)": {
+                    "id": "string (12-char prefix)",
+                    "name": "string",
+                    "image": "string",
+                    "created": "string (ISO 8601)",
+                    "started_at": "string (ISO 8601)",
+                    "finished_at": "string (ISO 8601)",
+                    "state": "object — {status, running, exit_code, error, restart_count, health}",
+                    "cmd": "list|null",
+                    "entrypoint": "list|null",
+                    "mounts": "list of {source, destination, mode}",
+                    "labels": "object",
+                    "restart_policy": "object — {name, max_retry}",
+                },
+                "image view (kind='image')": {
+                    "id": "string (12-char hex prefix)",
+                    "tags": "list[string]",
+                    "created": "string (ISO 8601)",
+                    "size_bytes": "number",
+                    "architecture": "string",
+                    "os": "string",
+                    "cmd": "list|null",
+                    "entrypoint": "list|null",
+                    "env_keys": "list[string] — NAMES only, values redacted",
+                    "exposed_ports": "list[string]",
+                    "volumes": "list[string]",
+                    "labels": "object",
+                    "working_dir": "string|null",
+                    "user": "string|null",
+                },
             },
         },
         {
@@ -371,8 +431,18 @@ SSH_HELP_RESPONSE = {
             "optional": {
                 "port": "int - default 22",
                 "key": "string - private key path (key auth only)",
+                "shell": (
+                    "Shell binary used for exec into this machine "
+                    "(default ``bash``). Set to e.g. ``/bin/sh`` for "
+                    "remote hosts without bash."
+                ),
             },
-            "returns": {"name": "string", "status": "connected", "backend": "ssh"},
+            "returns": {
+                "name": "string",
+                "status": "connected | error",
+                "backend": "ssh",
+                "error": "string — only present when status='error'",
+            },
             "example": {
                 "name": "remote",
                 "host": "192.168.1.100",
@@ -384,19 +454,31 @@ SSH_HELP_RESPONSE = {
             "action": "ssh_disconnect",
             "description": "Close SSH connection. Remote machine is not affected.",
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "stopped"},
+            "returns": {
+                "machine": "string",
+                "status": "stopped | error",
+                "error": "string — only present when status='error'",
+            },
         },
         {
             "action": "ssh_reconnect",
             "description": "Re-establish SSH connection. Shells are lost on disconnect.",
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "running"},
+            "returns": {
+                "machine": "string",
+                "status": "running | error",
+                "error": "string — only present when status='error'",
+            },
         },
         {
             "action": "ssh_remove",
             "description": "Unregister SSH machine. Remote machine is not affected.",
             "required": {"machine": "string"},
-            "returns": {"machine": "string", "status": "removed"},
+            "returns": {
+                "machine": "string",
+                "status": "removed | error",
+                "error": "string — only present when status='error'",
+            },
         },
     ]
 }
@@ -609,7 +691,10 @@ class SandboxEnv:
         machine, backend = resolved
         self._shells.close_all_for_machine(machine)
         info = backend.stop(machine)
-        return {"machine": machine, "status": info.status}
+        result = {"machine": machine, "status": info.status}
+        if info.error:
+            result["error"] = info.error
+        return result
 
     def _op_docker_start(self, params):
         resolved = self._resolve_docker_machine(params, "docker_start")
@@ -617,7 +702,10 @@ class SandboxEnv:
             return resolved
         machine, backend = resolved
         info = backend.start(machine)
-        return {"machine": machine, "status": info.status}
+        result = {"machine": machine, "status": info.status}
+        if info.error:
+            result["error"] = info.error
+        return result
 
     def _op_docker_remove(self, params):
         resolved = self._resolve_docker_machine(params, "docker_remove")
