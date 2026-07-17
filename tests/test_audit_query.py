@@ -350,11 +350,19 @@ def test_max_tail_is_100000():
 
 
 def _build_server(monkeypatch, log_path: str | None):
-    """Build a SandboxServer with a controlled audit config."""
+    """Build a SandboxServer with a controlled audit config.
+
+    Sets ``SANDBOX_MCP_AUDIT_LOG_PATH`` *and* rebuilds the audit module's
+    default logger so the SandboxServer captures the fresh one (not the
+    import-time instance pointing at a different DB).  Mirrors what
+    ``main_http()`` does in production.
+    """
+    from sandbox_mcp.audit import reset_default_logger
     from sandbox_mcp.server import SandboxServer as _Srv
 
     if log_path is not None:
         monkeypatch.setenv("SANDBOX_MCP_AUDIT_LOG_PATH", log_path)
+    reset_default_logger()
     with patch("sandbox_mcp.server.DockerBackend"), patch("sandbox_mcp.server.SSHBackend"):
         return _Srv()
 
@@ -495,6 +503,71 @@ def test_handler_no_caching_sees_new_records(monkeypatch, tmp_path):
     data2 = _call_audit(srv)
     assert data2["total"] == 1
     assert data2["records"][0]["action"] == "between"
+
+
+# ---------- e2e: tool call actually writes to the audit DB ----------
+
+def test_tool_call_writes_to_audit_db(monkeypatch, tmp_path):
+    """End-to-end: call_tool → audit.record → real SQLite row.
+
+    Regression guard for the 'record() silently no-ops' bug: if
+    SandboxServer.audit ever holds a closed (or otherwise broken)
+    AuditLogger again, this test catches it because the DB stays
+    empty after the call.
+    """
+    db = tmp_path / "audit.db"
+    srv = _build_server(monkeypatch, str(db))
+
+    # call_tool is the public API path; exercises the same audit
+    # finally-block the real HTTP server runs.
+    srv.call_tool("env", {"action": "docker_ps"})
+
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT machine, action, status FROM audit ORDER BY id"
+        ).fetchall()
+
+    assert len(rows) == 1, f"expected 1 audit row, got {rows!r}"
+    assert rows[0][1] == "docker_ps"
+    assert rows[0][2] == "ok"
+
+
+def test_each_tool_call_writes_a_row(monkeypatch, tmp_path):
+    """Each non-audit_query tool call produces exactly one audit row.
+
+    (audit_query is excluded by design — querying the log shouldn't
+    pollute the log.)  Three different actions → three rows in
+    insertion order.
+    """
+    db = tmp_path / "audit.db"
+    srv = _build_server(monkeypatch, str(db))
+
+    for action in ("docker_ps", "status", "docker_ps"):
+        srv.call_tool("env", {"action": action})
+
+    with sqlite3.connect(str(db)) as conn:
+        actions = [r[0] for r in conn.execute(
+            "SELECT action FROM audit ORDER BY id"
+        ).fetchall()]
+
+    assert actions == ["docker_ps", "status", "docker_ps"]
+
+
+def test_audit_query_does_not_record_itself(monkeypatch, tmp_path):
+    """The audit_query tool must not write to the audit DB.
+
+    This is a property test that protects the existing exclusion in
+    call_tool's finally-block — easy to regress if someone refactors
+    that conditional.
+    """
+    db = tmp_path / "audit.db"
+    srv = _build_server(monkeypatch, str(db))
+
+    srv.call_tool("audit_query", {"limit": 10})
+
+    with sqlite3.connect(str(db)) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+    assert count == 0, f"audit_query polluted the log: {count} rows"
 
 
 # ---------- regression: import-snapshot stale DEFAULT_AUDIT_LOGGER ----------
