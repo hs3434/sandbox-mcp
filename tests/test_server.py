@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -323,3 +323,48 @@ def test_provision_default_machine_ssh_requires_host_and_user(monkeypatch):
         pytest.raises(RuntimeError, match=r"requires.*default_host and default_user"),
     ):
         SandboxServer()
+
+
+# ---------- shell_exec error_kind responses ----------
+
+
+def test_handle_shell_exec_returns_shell_unhealthy_error_kind(monkeypatch, server):
+    """When open()'s health check fails, response has error_kind='shell_unhealthy'."""
+    from sandbox_mcp.backends.base import TargetInfo
+    from sandbox_mcp.shell_session import ShellUnhealthy
+
+    # Register a stub machine so _resolve_machine doesn't raise first.
+    server.machines.adopt(
+        "dev", MagicMock(), TargetInfo(name="dev", backend="docker", status="running")
+    )
+
+    def raise_unhealthy(*a, **kw):
+        raise ShellUnhealthy("broken bash")
+
+    monkeypatch.setattr(server.shells, "get_or_create_default", raise_unhealthy)
+
+    result = server._handle_shell_exec({"command": "echo hi", "machine": "dev"})
+    assert result["status"] == "error"
+    assert result["error_kind"] == "shell_unhealthy"
+    assert "broken bash" in result["error"]
+    assert result["machine"] == "dev"
+
+
+def test_handle_shell_exec_returns_shell_create_failed_error_kind(monkeypatch, server):
+    """When factory() raises a non-shell error, error_kind='shell_create_failed'."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    server.machines.adopt(
+        "dev", MagicMock(), TargetInfo(name="dev", backend="docker", status="running")
+    )
+
+    def raise_runtime(*a, **kw):
+        raise RuntimeError("docker daemon down")
+
+    monkeypatch.setattr(server.shells, "get_or_create_default", raise_runtime)
+
+    result = server._handle_shell_exec({"command": "echo hi", "machine": "dev"})
+    assert result["status"] == "error"
+    assert result["error_kind"] == "shell_create_failed"
+    assert "docker daemon down" in result["error"]
+    assert result["machine"] == "dev"

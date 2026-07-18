@@ -70,6 +70,7 @@ from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.file_operations import FileOperations
 from sandbox_mcp.sandbox_env import SandboxEnv
 from sandbox_mcp.shell_registry import ShellRegistry
+from sandbox_mcp.shell_session import ShellUnhealthy
 from sandbox_mcp.target_registry import TargetRegistry
 
 logger = logging.getLogger(__name__)
@@ -482,7 +483,24 @@ class SandboxServer:
         else:
             machine = self._resolve_machine(args)
             backend = self.machines.get_backend(machine)
-            sid = self.shells.get_or_create_default(machine, lambda: backend.open_shell(machine))
+            try:
+                sid = self.shells.get_or_create_default(
+                    machine, lambda: backend.open_shell(machine)
+                )
+            except ShellUnhealthy as e:
+                return {
+                    "status": "error",
+                    "error_kind": "shell_unhealthy",
+                    "error": f"[machine={machine!r}] {e}",
+                    "machine": machine,
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "error_kind": "shell_create_failed",
+                    "error": f"[machine={machine!r}] {e}",
+                    "machine": machine,
+                }
             session = self.shells.get(sid)
 
         return session.send(args["command"], wait=wait, timeout=timeout, max_output=max_output)
