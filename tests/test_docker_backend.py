@@ -1419,6 +1419,47 @@ def test_docker_build_wraps_typeerror(docker_backend, mock_client):
     assert "bind-mounted" in result["error"] or "bind mount" in result["error"]
 
 
+def test_docker_exec_process_poll_returns_running_and_exit():
+    """DockerExecProcess.poll() returns None while running, ExitCode when done.
+
+    Used by ShellSession._drain to capture exit_reason / last_exit_code
+    so the next shell can report why the previous one died.
+    """
+    from unittest.mock import MagicMock
+    from sandbox_mcp.backends.docker_backend import DockerExecProcess
+
+    api = MagicMock()
+    api.exec_create.return_value = {"Id": "exec-abc"}
+
+    container = MagicMock()
+    container.client.api = api
+    container.id = "c123"
+
+    # Pipe fds so __init__ doesn't crash.
+    import os
+
+    r_in, w_in = os.pipe()
+    r_out, w_out = os.pipe()
+
+    # Replace sock with a real socket pair so sendall/recv don't crash.
+    import socket
+
+    a, b = socket.socketpair()
+    container.client.api.exec_start.return_value = type(
+        "S", (), {"_sock": a}
+    )()
+
+    proc = DockerExecProcess(container, ["bash"])
+
+    # While running: poll() returns None.
+    api.exec_inspect.return_value = {"Running": True, "ExitCode": None}
+    assert proc.poll() is None
+
+    # After exit: poll() returns ExitCode.
+    api.exec_inspect.return_value = {"Running": False, "ExitCode": 42}
+    assert proc.poll() == 42
+
+
 def test_docker_compose_mounts_work_home():
     """docker-compose.yml must bind-mount WORK_HOME so docker_build works.
 
