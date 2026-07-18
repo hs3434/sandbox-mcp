@@ -45,6 +45,29 @@ from sandbox_mcp.config import load as _load_config
 _MARKER_RE = re.compile(r"__(START|END)_[0-9a-f]+__(?::\d+)?")
 
 
+class ShellUnhealthy(Exception):
+    """Raised when a freshly-created shell fails the health check.
+
+    The check sends ``true`` and expects a quick completed response.
+    Catching this in the registry prevents the broken shell from ever
+    being added to the active shell table — callers see a structured
+    ``error_kind="shell_unhealthy"`` instead of an opaque traceback.
+    """
+
+
+def _health_check(session) -> None:
+    """Verify a session is alive by sending ``true``.
+
+    Healthy bash responds in ~ms; only a broken shell hits the 1s
+    timeout.  Raises :class:`ShellUnhealthy` on any failure.
+    """
+    result = session.send("true", wait=True, timeout=1)
+    if session.state == "terminated":
+        raise ShellUnhealthy("shell died during health check")
+    if result.get("status") != "completed":
+        raise ShellUnhealthy(f"health check returned status={result.get('status')!r}")
+
+
 class ShellSession:
     """A persistent shell (bash) process with drain-thread-based I/O."""
 

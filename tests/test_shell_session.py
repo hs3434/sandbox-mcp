@@ -16,6 +16,8 @@
 
 import time
 
+import pytest
+
 from sandbox_mcp.shell_session import ShellSession
 
 
@@ -284,3 +286,42 @@ def test_exit_reason_default_is_unknown():
     assert session.exit_reason == "unknown"
     assert session.last_exit_code is None
     session.close()
+
+
+# ---------- _health_check ----------
+
+
+def test_health_check_passes_for_fresh_session():
+    from sandbox_mcp.shell_session import _health_check
+
+    session = ShellSession(["bash"])
+    _health_check(session)  # should not raise
+    session.close()
+
+
+def test_health_check_raises_when_send_returns_non_completed(monkeypatch):
+    from sandbox_mcp.shell_session import ShellUnhealthy, _health_check
+
+    session = ShellSession(["bash"])
+    monkeypatch.setattr(
+        session,
+        "send",
+        lambda *a, **kw: {"status": "running", "exit_code": None},
+    )
+    with pytest.raises(ShellUnhealthy, match="running"):
+        _health_check(session)
+    session.close()
+
+
+def test_health_check_raises_when_session_state_terminated(monkeypatch):
+    from sandbox_mcp.shell_session import ShellUnhealthy, _health_check
+
+    session = ShellSession(["bash"])
+
+    def fake_send(*a, **kw):
+        session._state = "terminated"
+        return {"status": "completed", "exit_code": 0}
+
+    monkeypatch.setattr(session, "send", fake_send)
+    with pytest.raises(ShellUnhealthy, match="died during"):
+        _health_check(session)
