@@ -258,8 +258,30 @@ class DockerExecProcess:
         self._demux_thread = threading.Thread(target=self._demux_loop, daemon=True)
         self._stdin_thread = threading.Thread(target=self._stdin_loop, daemon=True)
         self._done = threading.Event()
-        self._demux_thread.start()
-        self._stdin_thread.start()
+        # If either thread fails to start (very rare — system resource
+        # exhaustion), close everything we've built so the caller doesn't
+        # inherit leaked pipe fds.  Same on any exception raised here.
+        try:
+            self._demux_thread.start()
+            self._stdin_thread.start()
+        except Exception:
+            self._cleanup_pipes_on_init_failure()
+            raise
+
+    def _cleanup_pipes_on_init_failure(self):
+        """Close all pipe fds if __init__ aborted partway.  Best-effort."""
+        for fd_name in ("_stdin_r_fd", "_stdin_w_fd", "_stdout_r_fd", "_stdout_w_fd"):
+            fd = getattr(self, fd_name, None)
+            if fd is None:
+                continue
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            setattr(self, fd_name, None)
+        for attr in ("stdin", "stdout"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                with contextlib.suppress(Exception):
+                    obj.close()
 
     # ---- demux: sock → pipe (reads framed stdout, writes clean bytes) ----
 
@@ -1291,13 +1313,27 @@ class DockerBackend(Backend):
             return {"status": "error", "error": "container not found"}
 
         parent = os.path.dirname(path) or "/"
+        # Combine the parent + tmp_dir mkdirs into one round-trip.  Skip
+        # the parent mkdir entirely when target is at filesystem root.
+        tmp_dir = f"{_load_config().docker.write_tmp_prefix}{uuid.uuid4().hex[:8]}"
         if parent != "/":
-            mkdir = self.exec_oneoff(name, f"mkdir -p {shlex.quote(parent)}")
-            if mkdir.get("exit_code") not in (0, None):
+            mkdir_both = self.exec_oneoff(
+                name,
+                f"mkdir -p {shlex.quote(parent)} {shlex.quote(tmp_dir)}",
+            )
+            if mkdir_both.get("exit_code") not in (0, None):
                 return {
                     "status": "error",
                     "stage": "mkdir",
-                    "error": mkdir.get("stderr") or "mkdir failed",
+                    "error": mkdir_both.get("stderr") or "mkdir failed",
+                }
+        else:
+            mkdir_tmp = self.exec_oneoff(name, f"mkdir -p {shlex.quote(tmp_dir)}")
+            if mkdir_tmp.get("exit_code") not in (0, None):
+                return {
+                    "status": "error",
+                    "stage": "mkdir_tmp",
+                    "error": mkdir_tmp.get("stderr") or "mkdir failed",
                 }
 
         buf = io.BytesIO()
@@ -1307,15 +1343,6 @@ class DockerBackend(Backend):
             info.size = len(content)
             tar.addfile(info, io.BytesIO(content))
         tar_bytes = buf.getvalue()
-
-        tmp_dir = f"{_load_config().docker.write_tmp_prefix}{uuid.uuid4().hex[:8]}"
-        mkdir_tmp = self.exec_oneoff(name, f"mkdir -p {shlex.quote(tmp_dir)}")
-        if mkdir_tmp.get("exit_code") not in (0, None):
-            return {
-                "status": "error",
-                "stage": "mkdir_tmp",
-                "error": mkdir_tmp.get("stderr") or "mkdir failed",
-            }
 
         try:
             ok = container.put_archive(tmp_dir, tar_bytes)
@@ -1330,11 +1357,16 @@ class DockerBackend(Backend):
                 "error": "put_archive returned False",
             }
 
+        # Single round-trip for the atomic rename + cleanup: capture mv's
+        # exit code, then rm -rf the (now-empty) tmp dir, then return mv's
+        # exit code so the caller still sees the rename status.
         rename = self.exec_oneoff(
             name,
-            f"mv -f {shlex.quote(tmp_dir + '/' + filename)} {shlex.quote(path)}",
+            "ec=0; "
+            f"mv -f {shlex.quote(tmp_dir + '/' + filename)} {shlex.quote(path)} || ec=$?; "
+            f"rm -rf {shlex.quote(tmp_dir)}; "
+            "exit $ec",
         )
-        self.exec_oneoff(name, f"rm -rf {shlex.quote(tmp_dir)}")
         if rename.get("exit_code") not in (0, None):
             return {
                 "status": "error",

@@ -34,19 +34,22 @@ def fops(backend):
 # ---- read ----
 
 
+def _combined_read_output(file_size: int, content: str, total_lines: int, head: str = "") -> str:
+    """Build the structured output of the combined-read bash script."""
+    import base64
+
+    head_b64 = base64.b64encode(head.encode("utf-8")).decode("ascii")
+    content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    return f"{file_size}\n{head_b64}\n{content_b64}\n{total_lines}\n"
+
+
 def test_read_returns_line_numbered_output(fops, backend):
+    content = "line1\nline2\nline3\n"
     backend.exec_oneoff.return_value = {
         "exit_code": 0,
-        "output": "42\n",
+        "output": _combined_read_output(file_size=21, content=content, total_lines=3),
         "stderr": "",
     }
-    # wc -c, head -c, sed, wc -l all run; last call returns total lines.
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "21\n", "stderr": ""},  # wc -c
-        {"exit_code": 0, "output": "line1\nline2\nline3\n", "stderr": ""},  # head -c
-        {"exit_code": 0, "output": "line1\nline2\nline3\n", "stderr": ""},  # sed
-        {"exit_code": 0, "output": "3\n", "stderr": ""},  # wc -l
-    ]
     result = fops.read("/tmp/x.txt", machine="dev")
     assert result["status"] == "ok"
     assert result["path"] == "/tmp/x.txt"
@@ -55,12 +58,12 @@ def test_read_returns_line_numbered_output(fops, backend):
 
 
 def test_read_pagination_offset_and_limit(fops, backend):
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "100\n", "stderr": ""},  # wc -c
-        {"exit_code": 0, "output": "line2\nline3\n", "stderr": ""},  # head -c
-        {"exit_code": 0, "output": "line2\nline3\n", "stderr": ""},  # sed
-        {"exit_code": 0, "output": "5\n", "stderr": ""},  # wc -l
-    ]
+    content = "line2\nline3\n"
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0,
+        "output": _combined_read_output(file_size=100, content=content, total_lines=5),
+        "stderr": "",
+    }
     result = fops.read("/tmp/x.txt", machine="dev", offset=2, limit=2)
     assert result["offset"] == 2
     assert result["limit"] == 2
@@ -72,12 +75,11 @@ def test_read_pagination_offset_and_limit(fops, backend):
 
 
 def test_read_returns_truncation_hint_at_eof(fops, backend):
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "10\n", "stderr": ""},
-        {"exit_code": 0, "output": "a\n", "stderr": ""},
-        {"exit_code": 0, "output": "a\n", "stderr": ""},
-        {"exit_code": 0, "output": "1\n", "stderr": ""},
-    ]
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0,
+        "output": _combined_read_output(file_size=10, content="a\n", total_lines=1),
+        "stderr": "",
+    }
     result = fops.read("/tmp/x.txt", machine="dev", offset=1, limit=500)
     assert result["truncated"] is False
     assert "End of file" in result["hint"]
@@ -85,8 +87,8 @@ def test_read_returns_truncation_hint_at_eof(fops, backend):
 
 def test_read_not_found_returns_suggestions(fops, backend):
     backend.exec_oneoff.side_effect = [
-        {"exit_code": 1, "output": "", "stderr": ""},  # wc -c (file missing)
-        {"exit_code": 0, "output": "missing.bak\nother.txt\n", "stderr": ""},  # ls
+        {"exit_code": 2, "output": "", "stderr": ""},  # file not readable
+        {"exit_code": 0, "output": "missing.bak\nother.txt\n", "stderr": ""},  # ls for suggestions
     ]
     result = fops.read("/tmp/missing.txt", machine="dev")
     assert result["status"] == "not_found"
@@ -94,18 +96,30 @@ def test_read_not_found_returns_suggestions(fops, backend):
 
 
 def test_read_detects_binary(fops, backend):
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "1024\n", "stderr": ""},
-        {"exit_code": 0, "output": "binary\x00data", "stderr": ""},
-    ]
+    import base64
+
+    head = "binary\x00data"
+    head_b64 = base64.b64encode(head.encode("utf-8", errors="surrogateescape")).decode("ascii")
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0,
+        "output": f"1024\n{head_b64}\n\n0\n",
+        "stderr": "",
+    }
     result = fops.read("/tmp/blob.bin", machine="dev")
     assert result["status"] == "binary"
 
 
 def test_read_image_returns_image_hint(fops, backend):
-    backend.exec_oneoff.side_effect = [
-        {"exit_code": 0, "output": "4096\n", "stderr": ""},
-    ]
+    # Image short-circuit: only the size line is needed (script skips
+    # the rest because size <= max and path is detected as image before
+    # parsing the head section).
+    backend.exec_oneoff.return_value = {
+        "exit_code": 0,
+        "output": _combined_read_output(
+            file_size=4096, content="ignored", total_lines=0, head="ignored"
+        ),
+        "stderr": "",
+    }
     result = fops.read("/tmp/pic.png", machine="dev")
     assert result["status"] == "image"
 
