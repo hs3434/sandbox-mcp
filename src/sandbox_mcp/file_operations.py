@@ -97,6 +97,19 @@ def _strip_terminal_fence_leaks(text: str) -> str:
     return _TERMINAL_ESCAPE_RE.sub("", text)
 
 
+def _attach_safety_advisory(result: dict, advisory: dict) -> dict:
+    """Mutate ``result`` in place to add a path-safety warning if present.
+
+    Used by every successful read/write/patch response so the agent
+    sees the warning without each call site having to repeat the same
+    3-line ``if advisory["warning"]: ...`` block.
+    """
+    if advisory.get("warning"):
+        result["warning"] = advisory["warning"]
+        result["safety_category"] = advisory.get("category")
+    return result
+
+
 # ---- In-process linters ----------------------------------------------------
 
 
@@ -390,9 +403,7 @@ class FileOperations:
             "hint": hint,
             "output": "\n".join(numbered) + ("\n" if numbered else ""),
         }
-        if advisory["warning"]:
-            result["warning"] = advisory["warning"]
-            result["safety_category"] = advisory["category"]
+        _attach_safety_advisory(result, advisory)
         return result
 
     def _suggest_similar_files(self, path: str, machine: str) -> dict:
@@ -505,9 +516,7 @@ class FileOperations:
             "bytes_written": bytes_written,
             "lint": lint_summary,
         }
-        if advisory["warning"]:
-            result["warning"] = advisory["warning"]
-            result["safety_category"] = advisory["category"]
+        _attach_safety_advisory(result, advisory)
         return result
 
     # ---- patch ----
@@ -586,9 +595,7 @@ class FileOperations:
             return {"status": "error", "error": "patch did not persist"}
 
         result = {"status": "ok", "path": path, "matches": count, "fuzzy": fuzzy, "diff": diff}
-        if advisory["warning"]:
-            result["warning"] = advisory["warning"]
-            result["safety_category"] = advisory["category"]
+        _attach_safety_advisory(result, advisory)
         return result
 
     def _patch_apply(self, machine: str, patch_text: str) -> dict:

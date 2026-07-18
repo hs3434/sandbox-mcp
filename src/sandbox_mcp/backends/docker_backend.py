@@ -48,6 +48,18 @@ def _docker_module():
     return docker
 
 
+def _docker_error(e: Exception) -> dict:
+    """Translate a docker SDK exception to the standard MCP error dict.
+
+    Used at the catch sites that just want to surface the daemon's
+    explanation as a generic ``{"status": "error", "error": "..."}``
+    response.  Call sites that need a richer shape (e.g. ``exec_oneoff``
+    with its ``exit_code``/``stderr`` fields, or ``write_file`` with
+    its ``stage`` field) keep their own translation.
+    """
+    return {"status": "error", "error": str(e.explanation or e)}
+
+
 # Bind-mount targets inside the container.  Single source of truth so a
 # future rename only touches this file (the agent-facing schema, tests,
 # and READMEs all mirror these constants via grep-and-replace).
@@ -829,7 +841,7 @@ class DockerBackend(Backend):
             docker.errors.ImageNotFound,
             docker.errors.APIError,
         ) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         if raw:
             return obj.attrs
@@ -867,12 +879,12 @@ class DockerBackend(Backend):
         try:
             container = self._ensure_client().containers.get(name)
         except (docker.errors.NotFound, docker.errors.APIError) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         try:
             raw = container.logs(tail=tail, since=since, until=until, timestamps=timestamps)
         except (docker.errors.NotFound, docker.errors.APIError) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw or "")
         # Heuristic: if the daemon returned at least `tail` newlines, the
@@ -896,7 +908,7 @@ class DockerBackend(Backend):
             container = self._ensure_client().containers.get(name)
             raw = container.diff()
         except (docker.errors.NotFound, docker.errors.APIError) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         added, changed, deleted = [], [], []
         for entry in raw or []:
@@ -935,7 +947,7 @@ class DockerBackend(Backend):
             docker.errors.NotFound,
             docker.errors.APIError,
         ) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         layers = [
             {
@@ -967,7 +979,7 @@ class DockerBackend(Backend):
             container = self._ensure_client().containers.get(name)
             raw = container.stats(stream=False)
         except (docker.errors.NotFound, docker.errors.APIError) as e:
-            return {"error": str(e.explanation or e), "status": "error"}
+            return _docker_error(e)
 
         cpu = self._compute_cpu_percent(raw)
         mem = self._compute_memory(raw)

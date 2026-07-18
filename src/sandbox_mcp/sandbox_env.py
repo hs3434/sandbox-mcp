@@ -23,6 +23,7 @@ Discovered via docker_help/ssh_help: backend-specific lifecycle.
 
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from typing import Any
@@ -513,6 +514,35 @@ def _format_uptime(created_at: float) -> str:
     return f"{uptime_s}s"
 
 
+def _with_resolved(resolver_attr: str, action: str):
+    """Decorator: resolve the target machine before calling the handler.
+
+    Calls ``self.<resolver_attr>(params, action)``.  If the resolver
+    returns an error dict, that dict is propagated as the handler's
+    return value.  Otherwise the wrapped handler is invoked with
+    ``(self, params, machine, backend)``.
+
+    Centralises the "isinstance(resolved, dict)" gate that used to
+    appear 12 times across docker_commit / stop / start / remove /
+    inspect / logs / diff / stats / restart / ssh_disconnect /
+    ssh_reconnect / ssh_remove.
+    """
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(self, params, *args, **kwargs):
+            resolver = getattr(self, resolver_attr)
+            resolved = resolver(params, action)
+            if isinstance(resolved, dict):
+                return resolved
+            machine, backend = resolved
+            return fn(self, params, machine, backend, *args, **kwargs)
+
+        return wrapper
+
+    return deco
+
+
 class SandboxEnv:
     """Dispatches sandbox_env actions and generates help responses."""
 
@@ -594,30 +624,33 @@ class SandboxEnv:
             return f"Missing required params: {', '.join(missing)}"
         return None
 
-    def _resolve_docker_machine(self, params, action: str) -> tuple[str, DockerBackend] | dict:
-        """Resolve a Docker machine from params; return ``(machine, backend)``
-        or a ready-to-return ``{"error": ...}`` dict on any failure
-        (missing key, unknown machine, wrong backend type).
+    def _resolve_machine_of_type(self, params, action, backend_cls, type_label):
+        """Resolve a machine and assert its backend is of ``backend_cls``.
+
+        Returns ``(machine, backend)`` on success or a ready-to-return
+        ``{"error": ...}`` dict on any failure (missing key, unknown
+        machine, wrong backend type).  Callers should use
+        :func:`_with_resolved` to avoid the boilerplate isinstance check.
         """
         err = self._require(params, "machine")
         if err is not None:
             return {"error": err}
         machine = self._machines.resolve_machine(params["machine"])
         backend = self._machines.get_backend(machine)
-        if not isinstance(backend, DockerBackend):
-            return {"error": f"{action} only supported on Docker machines"}
+        if not isinstance(backend, backend_cls):
+            return {"error": f"{action} only supported on {type_label} machines"}
         return machine, backend
+
+    def _resolve_docker_machine(self, params, action: str) -> tuple[str, DockerBackend] | dict:
+        """Thin wrapper kept for clarity at call sites — delegates to
+        :meth:`_resolve_machine_of_type`.  Prefer the
+        :func:`_with_resolved` decorator on the handler.
+        """
+        return self._resolve_machine_of_type(params, action, DockerBackend, "Docker")
 
     def _resolve_ssh_machine(self, params, action: str) -> tuple[str, SSHBackend] | dict:
         """SSH counterpart of :meth:`_resolve_docker_machine`."""
-        err = self._require(params, "machine")
-        if err is not None:
-            return {"error": err}
-        machine = self._machines.resolve_machine(params["machine"])
-        backend = self._machines.get_backend(machine)
-        if not isinstance(backend, SSHBackend):
-            return {"error": f"{action} only supported on SSH machines"}
-        return machine, backend
+        return self._resolve_machine_of_type(params, action, SSHBackend, "SSH")
 
     def _op_default_set(self, params):
         has_machine = "machine" in params
@@ -670,11 +703,8 @@ class SandboxEnv:
         # (note, e.g. "reattached to existing container").  Without this
         # the agent can't tell a fresh create from a 409 reattach, nor
         # see why a container failed to stay running.
-        result = {"name": info.name, "status": info.status, "backend": "docker"}
-        if info.error:
-            result["error"] = info.error
-        if info.note:
-            result["note"] = info.note
+        result = info.to_response(name_key="name")
+        result["backend"] = "docker"
         return result
 
     def _op_docker_build(self, params):
@@ -730,34 +760,17 @@ class SandboxEnv:
         machine, backend = resolved
         return backend.commit(machine, params["image_tag"])
 
-    def _op_docker_stop(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_stop")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_docker_machine", "docker_stop")
+    def _op_docker_stop(self, params, machine, backend):
         self._shells.close_all_for_machine(machine)
-        info = backend.stop(machine)
-        result = {"machine": machine, "status": info.status}
-        if info.error:
-            result["error"] = info.error
-        return result
+        return backend.stop(machine).to_response()
 
-    def _op_docker_start(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_start")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
-        info = backend.start(machine)
-        result = {"machine": machine, "status": info.status}
-        if info.error:
-            result["error"] = info.error
-        return result
+    @_with_resolved("_resolve_docker_machine", "docker_start")
+    def _op_docker_start(self, params, machine, backend):
+        return backend.start(machine).to_response()
 
-    def _op_docker_remove(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_remove")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_docker_machine", "docker_remove")
+    def _op_docker_remove(self, params, machine, backend):
         self._shells.close_all_for_machine(machine)
         result = backend.remove(machine)
         self._machines.unregister(machine)
@@ -825,6 +838,11 @@ class SandboxEnv:
     def _op_docker_inspect(self, params):
         kind = params.get("kind", "container")
         if kind == "image":
+            # Image mode doesn't use the per-machine resolver — the
+            # agent passes the image ref directly, not a managed
+            # machine name.  Kept inline rather than via
+            # ``_with_resolved`` because the decorator would force
+            # resolve_machine before we know we need to skip it.
             err = self._require(params, "machine")
             if err is not None:
                 return {"error": err}
@@ -837,11 +855,8 @@ class SandboxEnv:
         machine, backend = resolved
         return backend.inspect(machine, raw=bool(params.get("raw", False)))
 
-    def _op_docker_logs(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_logs")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_docker_machine", "docker_logs")
+    def _op_docker_logs(self, params, machine, backend):
         return backend.logs(
             machine,
             tail=int(params.get("tail", 200)),
@@ -850,30 +865,17 @@ class SandboxEnv:
             timestamps=bool(params.get("timestamps", False)),
         )
 
-    def _op_docker_diff(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_diff")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_docker_machine", "docker_diff")
+    def _op_docker_diff(self, params, machine, backend):
         return backend.diff(machine)
 
-    def _op_docker_stats(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_stats")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_docker_machine", "docker_stats")
+    def _op_docker_stats(self, params, machine, backend):
         return backend.stats(machine)
 
-    def _op_docker_restart(self, params):
-        resolved = self._resolve_docker_machine(params, "docker_restart")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
-        info = backend.restart(machine, timeout=int(params.get("timeout", 10)))
-        result = {"machine": machine, "status": info.status}
-        if info.error:
-            result["error"] = info.error
-        return result
+    @_with_resolved("_resolve_docker_machine", "docker_restart")
+    def _op_docker_restart(self, params, machine, backend):
+        return backend.restart(machine, timeout=int(params.get("timeout", 10))).to_response()
 
     # ---- ssh ----
 
@@ -893,28 +895,17 @@ class SandboxEnv:
         )
         return {"name": info.name, "status": info.status, "backend": "ssh"}
 
-    def _op_ssh_disconnect(self, params):
-        resolved = self._resolve_ssh_machine(params, "ssh_disconnect")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_ssh_machine", "ssh_disconnect")
+    def _op_ssh_disconnect(self, params, machine, backend):
         self._shells.close_all_for_machine(machine)
-        info = backend.stop(machine)
-        return {"machine": machine, "status": info.status}
+        return backend.stop(machine).to_response()
 
-    def _op_ssh_reconnect(self, params):
-        resolved = self._resolve_ssh_machine(params, "ssh_reconnect")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
-        info = backend.start(machine)
-        return {"machine": machine, "status": info.status}
+    @_with_resolved("_resolve_ssh_machine", "ssh_reconnect")
+    def _op_ssh_reconnect(self, params, machine, backend):
+        return backend.start(machine).to_response()
 
-    def _op_ssh_remove(self, params):
-        resolved = self._resolve_ssh_machine(params, "ssh_remove")
-        if isinstance(resolved, dict):
-            return resolved
-        machine, backend = resolved
+    @_with_resolved("_resolve_ssh_machine", "ssh_remove")
+    def _op_ssh_remove(self, params, machine, backend):
         self._shells.close_all_for_machine(machine)
         result = backend.remove(machine)
         self._machines.unregister(machine)

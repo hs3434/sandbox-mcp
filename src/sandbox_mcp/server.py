@@ -597,17 +597,48 @@ def main(argv: list[str] | None = None):
         description="Run sandbox-mcp over stdio (for Hermes and other MCP hosts).",
     ).parse_args(argv)
     _apply_cli_overrides_to_env(args)
+    _setup_logging_and_audit()
 
-    from mcp.server import Server
     from mcp.server.stdio import stdio_server
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    server = SandboxServer()
+    mcp_server = _make_mcp_server(server)
+
+    async def run():
+        async with stdio_server() as (read_stream, write_stream):
+            await mcp_server.run(
+                read_stream, write_stream, mcp_server.create_initialization_options()
+            )
+
+    asyncio.run(run())
+
+
+def _setup_logging_and_audit() -> None:
+    """Standard entry-point logging: basicConfig + audit-log-path announcement.
+
+    Called from both ``main()`` (stdio) and ``main_http()`` so the
+    pre-flight logs are identical across transports.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
     audit_log_path = _load_config().audit.log_path
     if audit_log_path:
         logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
     else:
         logger.warning("audit: log_path=<empty> (query tool disabled)")
-    server = SandboxServer()
+
+
+def _make_mcp_server(server: SandboxServer):
+    """Wrap a ``SandboxServer`` in an ``mcp.Server`` with the standard handlers.
+
+    Both ``main()`` and ``main_http()`` use this — the only thing that
+    differs between the two transports is the stream plumbing around the
+    returned server object.
+    """
+    from mcp.server import Server
+
     mcp_server = Server("sandbox-mcp")
 
     @mcp_server.list_tools()
@@ -618,13 +649,7 @@ def main(argv: list[str] | None = None):
     async def handle_call_tool(name, arguments):
         return server.call_tool(name, arguments)
 
-    async def run():
-        async with stdio_server() as (read_stream, write_stream):
-            await mcp_server.run(
-                read_stream, write_stream, mcp_server.create_initialization_options()
-            )
-
-    asyncio.run(run())
+    return mcp_server
 
 
 def main_http(argv: list[str] | None = None):
@@ -686,15 +711,7 @@ def main_http(argv: list[str] | None = None):
             )
             sys.exit(1)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
-    audit_log_path = _load_config().audit.log_path
-    if audit_log_path:
-        logger.info("audit: log_path=%s (query tool enabled)", audit_log_path)
-    else:
-        logger.warning("audit: log_path=<empty> (query tool disabled)")
+    _setup_logging_and_audit()
     logger.info("Starting sandbox-mcp HTTP server on %s:%s", host, port)
     logger.info("Tokens file: %s (hot-reloaded per request)", tokens_file)
 
@@ -714,20 +731,11 @@ def _build_http_app(*, tokens_file):
     The app is wrapped in :class:`BearerAuthMiddleware` which re-reads
     the token file on every request for hot-reload.
     """
-    from mcp.server import Server
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
     server = SandboxServer()
-    mcp_server = Server("sandbox-mcp")
-
-    @mcp_server.list_tools()
-    async def handle_list_tools():
-        return server.list_tools()
-
-    @mcp_server.call_tool()
-    async def handle_call_tool(name, arguments):
-        return server.call_tool(name, arguments)
+    mcp_server = _make_mcp_server(server)
 
     from contextlib import asynccontextmanager
 

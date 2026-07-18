@@ -43,6 +43,21 @@ class TargetInfo:
     # Distinct from ``error`` (which marks status="error").
     note: str = ""
 
+    def to_response(self, *, name_key: str = "machine") -> dict:
+        """Project to the wire-format dict used by MCP tool responses.
+
+        ``name_key`` is "machine" for actions like stop/start/restart
+        and "name" for docker_run (which is the create site).  Always
+        includes ``error`` and ``note`` when non-empty so the caller
+        doesn't have to repeat the same conditional inclusion logic.
+        """
+        result: dict = {name_key: self.name, "status": self.status}
+        if self.error:
+            result["error"] = self.error
+        if self.note:
+            result["note"] = self.note
+        return result
+
 
 class Backend(ABC):
     """Abstract interface for sandbox backends."""

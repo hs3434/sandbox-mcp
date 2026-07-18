@@ -154,7 +154,11 @@ def test_shell_list(sandbox_env):
 
 
 def test_docker_run(sandbox_env):
-    info = MagicMock(name="dev", backend="docker", status="running", purpose="test")
+    # Use a real TargetInfo so info.to_response() (a real method, not a
+    # mock attribute) returns a real dict for the assertion.
+    from sandbox_mcp.backends.base import TargetInfo
+
+    info = TargetInfo(name="dev", backend="docker", status="running", purpose="test")
     sandbox_env._machines.register.return_value = info
     result = sandbox_env.dispatch(
         "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
