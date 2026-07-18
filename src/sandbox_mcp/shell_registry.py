@@ -63,7 +63,15 @@ class ShellRegistry:
     def get_or_create_default(self, machine: str, factory: Callable[[], ShellSession]) -> str:
         existing = self._default_shells.get(machine)
         if existing and existing in self._shells:
-            return existing
+            entry = self._shells[existing]
+            # Self-heal: if the default shell has died (e.g. agent ran
+            # ``exit`` or it OOM'd), drop it and fall through to create a
+            # fresh one.  Otherwise shell_exec would return a confusing
+            # "Shell is terminated" error on every call until the agent
+            # explicitly notices and calls shell_remove.
+            if entry["session"].state != "terminated":
+                return existing
+            self.close(existing)
         session = factory()
         shell_id = self.open(machine, session, purpose="default")
         self._default_shells[machine] = shell_id

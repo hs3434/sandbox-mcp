@@ -78,6 +78,31 @@ def test_get_or_create_default():
     assert shell_id == shell_id2
 
 
+def test_get_or_create_default_replaces_dead_shell():
+    """Dead default shell is dropped and a fresh one is created.
+
+    Without self-heal, an agent that ran ``exit`` (or hit a shell crash)
+    would get ``"Shell is terminated"`` on every subsequent
+    ``shell_exec`` until it noticed and called ``shell_remove``.  The
+    registry now detects state=="terminated" on the cached default and
+    transparently recreates.
+    """
+    reg = ShellRegistry()
+    dead_shell = MagicMock(state="terminated", purpose=None, uptime=0, last_command=None)
+    dead_id = reg.get_or_create_default("dev", lambda: dead_shell)
+
+    fresh_shell = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
+    fresh_id = reg.get_or_create_default("dev", lambda: fresh_shell)
+
+    assert fresh_id != dead_id, "dead default must be replaced, not reused"
+    # Old shell was closed (self-heal calls reg.close() on the dead one).
+    dead_shell.close.assert_called_once()
+    # New shell is the active default.
+    assert reg.get_machine(fresh_id) == "dev"
+    shells = reg.list_shells(machine="dev")
+    assert next(s for s in shells if s["shell_id"] == fresh_id)["is_default"] is True
+
+
 def test_set_default_shell():
     reg = ShellRegistry()
     shell1 = reg.open("dev", MagicMock(state="idle", purpose=None, uptime=0, last_command=None))

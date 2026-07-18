@@ -29,8 +29,11 @@ Buffer sizes and the default output cap are configurable via
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 import select
+import signal
 import subprocess
 import threading
 import time
@@ -94,6 +97,13 @@ class ShellSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
+            # New process group + session so close() can killpg() the
+            # whole tree.  Without this, a long-running child like
+            # ``sleep 60`` inherits bash's stdout pipe FD and keeps it
+            # open after bash is killed — the drain thread blocks on
+            # readline waiting for EOF that never comes, and close()
+            # hits its drain_thread.join(timeout=2) every time.
+            start_new_session=True,
         )
         self._state = "idle"
         self._drain_thread = threading.Thread(target=self._drain, daemon=True)
@@ -303,9 +313,23 @@ class ShellSession:
         with self._lock:
             self._state = "terminated"
         if self._process:
+            # Kill the whole process group (bash + any descendants like
+            # ``sleep 60``) so the stdout pipe closes immediately.  Falls
+            # back to direct kill for externally-provided processes
+            # (e.g. Docker exec fds) that don't own a process group.
             try:
-                self._process.kill()
+                if hasattr(self._process, "pid") and self._process.pid is not None:
+                    pgid = os.getpgid(self._process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                else:
+                    self._process.kill()
                 self._process.wait(timeout=5)
+            except (ProcessLookupError, PermissionError):
+                # Already gone or not our group — try plain kill.
+                with contextlib.suppress(Exception):
+                    self._process.kill()
+                with contextlib.suppress(Exception):
+                    self._process.wait(timeout=5)
             except Exception:
                 pass
             self._process = None

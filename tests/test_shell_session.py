@@ -49,7 +49,7 @@ def test_send_wait_true_exit_code():
 
 def test_send_wait_true_timeout_returns_running():
     session = ShellSession(["bash"])
-    result = session.send("sleep 10", wait=True, timeout=1)
+    result = session.send("sleep 5", wait=True, timeout=1)
     assert result["status"] == "running"
     assert result["exit_code"] is None
     session.close()
@@ -65,7 +65,7 @@ def test_send_wait_false_confirms_execution():
 
 def test_send_on_busy_shell_rejected():
     session = ShellSession(["bash"])
-    session.send("sleep 5", wait=True, timeout=0.5)
+    session.send("sleep 2", wait=True, timeout=0.5)
     result = session.send("echo should_fail", wait=True, timeout=1)
     assert result["status"] == "error"
     assert "busy" in result.get("error", "").lower()
@@ -75,7 +75,7 @@ def test_send_on_busy_shell_rejected():
 def test_read_after_wait_false():
     session = ShellSession(["bash"])
     session.send("echo hello; sleep 0.3; echo done", wait=False, timeout=3)
-    time.sleep(1.0)
+    time.sleep(0.5)
     found_completed = False
     for _ in range(20):
         result = session.read()
@@ -166,3 +166,36 @@ def test_close_joins_drain_thread():
     assert thread.is_alive()
     session.close()
     assert not thread.is_alive()
+
+
+def test_close_kills_descendant_subprocesses():
+    """close() must kill descendants, not just bash, so the stdout pipe closes.
+
+    Regression: bash spawning ``sleep N`` made sleep inherit bash's stdout
+    pipe FD.  Killing only bash left sleep alive holding the pipe open,
+    so the drain thread blocked on readline waiting for EOF and
+    ``_drain_thread.join(timeout=2)`` timed out on every close().  Fix:
+    start bash in its own process group and killpg(SIGKILL) in close().
+
+    We can't easily prove sleep is dead (it'd need /proc inspection or a
+    child reaper), so the observable contract is just: close() returns
+    fast (<1s) and the drain thread exits within close()'s join window.
+    """
+    import time as _time
+
+    session = ShellSession(["bash"])
+    # Long-running descendant — would previously keep the pipe open.
+    session.send("sleep 30", wait=True, timeout=0.2)
+    assert session.state == "running"
+
+    drain_thread = session._drain_thread
+    assert drain_thread is not None and drain_thread.is_alive()
+
+    t0 = _time.monotonic()
+    session.close()
+    elapsed = _time.monotonic() - t0
+
+    assert not drain_thread.is_alive(), "drain thread must exit when descendants are killed"
+    # Pre-fix this was >2s because of the orphaned sleep keeping the pipe
+    # open.  Post-fix, killpg closes the pipe and drain exits in ms.
+    assert elapsed < 1.0, f"close() took {elapsed:.2f}s, expected <1s"
