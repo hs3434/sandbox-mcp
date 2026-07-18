@@ -22,7 +22,7 @@ import contextlib
 import uuid
 from collections.abc import Callable
 
-from sandbox_mcp.shell_session import ShellSession
+from sandbox_mcp.shell_session import ShellSession, ShellUnhealthy, _health_check
 
 
 class ShellRegistry:
@@ -33,6 +33,16 @@ class ShellRegistry:
         self._default_shells: dict[str, str] = {}
 
     def open(self, machine: str, session: ShellSession, purpose: str = "") -> str:
+        """Register a session.  Health-checks the session before publishing
+        so broken shells are never added to the registry.  Closes the
+        session before raising so the caller doesn't have to clean up.
+        """
+        try:
+            _health_check(session)
+        except ShellUnhealthy:
+            with contextlib.suppress(Exception):
+                session.close()
+            raise
         shell_id = f"sh_{uuid.uuid4().hex[:12]}"
         self._shells[shell_id] = {
             "session": session,

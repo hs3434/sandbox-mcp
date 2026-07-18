@@ -16,7 +16,19 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from sandbox_mcp.shell_registry import ShellRegistry
+
+
+@pytest.fixture(autouse=True)
+def _patch_health_check(monkeypatch):
+    """Existing tests don't exercise health checking; bypass it so
+    MagicMock sessions can register without raising.
+    """
+    monkeypatch.setattr(
+        "sandbox_mcp.shell_registry._health_check", lambda session: None
+    )
 
 
 def test_open_shell():
@@ -123,3 +135,35 @@ def test_close_all_for_machine():
     reg.close_all_for_machine("dev")
     assert len(reg.list_shells(machine="dev")) == 0
     assert len(reg.list_shells()) == 1
+
+
+# ---------- open() health check ----------
+
+
+def test_open_health_checks_before_publishing(monkeypatch):
+    """open() runs _health_check; on failure closes the session and raises."""
+    from sandbox_mcp.shell_session import ShellUnhealthy
+
+    monkeypatch.setattr(
+        "sandbox_mcp.shell_registry._health_check",
+        lambda session: (_ for _ in ()).throw(ShellUnhealthy("broken")),
+    )
+
+    reg = ShellRegistry()
+    broken_session = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
+
+    with pytest.raises(ShellUnhealthy):
+        reg.open("dev", broken_session)
+
+    broken_session.close.assert_called_once()
+    assert reg.list_shells() == []
+
+
+def test_open_publishes_healthy_session(monkeypatch):
+    monkeypatch.setattr(
+        "sandbox_mcp.shell_registry._health_check", lambda session: None
+    )
+    reg = ShellRegistry()
+    session = MagicMock(state="idle", purpose=None, uptime=0, last_command=None)
+    shell_id = reg.open("dev", session)
+    assert shell_id in [s["shell_id"] for s in reg.list_shells()]
