@@ -105,6 +105,17 @@ class ShellRegistry:
             result.append(item)
         return result
 
+    def count_shells(self, machine: str | None = None) -> int:
+        """Count shells without building per-shell dicts.
+
+        Use this when only the count is needed (e.g. ``machine_list``
+        summary).  Avoids the O(S) dict allocation in ``list_shells``
+        per machine.
+        """
+        if machine is None:
+            return len(self._shells)
+        return sum(1 for e in self._shells.values() if e["machine"] == machine)
+
     def close_all_for_machine(self, machine: str) -> int:
         count = 0
         for sid in [s for s, e in self._shells.items() if e["machine"] == machine]:

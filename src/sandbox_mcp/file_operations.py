@@ -88,10 +88,13 @@ def _strip_bom(text: str) -> tuple[str, bool]:
     return text, False
 
 
+_TERMINAL_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+
+
 def _strip_terminal_fence_leaks(text: str) -> str:
     """Strip terminal escape sequences that leak into captured stdout."""
     # Remove CSI sequences, OSC sequences, simple color codes.
-    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07", "", text)
+    return _TERMINAL_ESCAPE_RE.sub("", text)
 
 
 # ---- In-process linters ----------------------------------------------------
@@ -283,14 +286,40 @@ class FileOperations:
         limit = max(1, min(int(limit), cfg.max_read_limit))
 
         q_path = shlex.quote(path)
-        # File size guard — wc -c is POSIX, works on Linux + macOS.
-        size_result = self._backend.exec_oneoff(machine, f"wc -c < {q_path} 2>/dev/null")
-        if size_result.get("exit_code") not in (0, None):
+        q_max_size = shlex.quote(str(cfg.max_file_size))
+        end_line = offset + limit - 1
+        # Combined read: 1 round-trip instead of 4 (size + binary sniff +
+        # content + total-lines).  Output is newline-separated; the head
+        # and content sections are base64 so they can't contain newlines
+        # that would confuse the parser.  Exit 2 = file not readable
+        # (caller treats as not_found); exit 0 = success.
+        #
+        # When file is too large, only line 1 (size) is emitted; the
+        # rest is skipped via the `if` branch so we don't waste exec
+        # work reading 4 KB and a slice of a multi-MB file.
+        cmd = (
+            f"f={q_path}; ms={q_max_size}; "
+            f'[[ ! -r "$f" ]] && exit 2; '
+            f'sz=$(stat -c %s "$f"); echo "$sz"; '
+            f"if (( sz <= ms )); then "
+            f'head -c 4096 "$f" | base64 -w0; echo; '
+            f'sed -n {offset},{end_line}p "$f" | base64 -w0; echo; '
+            f"wc -l < \"$f\" | tr -d ' '; "
+            f"fi"
+        )
+        result = self._backend.exec_oneoff(machine, cmd)
+        if result.get("exit_code") == 2:
             return self._suggest_similar_files(path, machine)
+        if result.get("exit_code") not in (0, None):
+            return self._suggest_similar_files(path, machine)
+
+        # Parse the structured output.  rstrip the trailing newline so
+        # split() doesn't produce a phantom empty element.
+        out_lines = (result.get("output") or "").rstrip("\n").split("\n")
         try:
-            file_size = int(size_result.get("output", "").strip())
-        except ValueError:
-            file_size = 0
+            file_size = int(out_lines[0].strip())
+        except (ValueError, IndexError):
+            return self._suggest_similar_files(path, machine)
 
         if file_size > cfg.max_file_size:
             return {
@@ -309,9 +338,18 @@ class FileOperations:
         if _is_image(path):
             return {"status": "image", "hint": "Image file. Use shell to inspect (e.g. `file`)."}
 
-        # Sample first 4 KB for binary detection.
-        sample_result = self._backend.exec_oneoff(machine, f"head -c 4096 {q_path} 2>/dev/null")
-        sample = (sample_result.get("output") or "").encode("utf-8", errors="replace")
+        if len(out_lines) < 4:
+            # Head / sed / wc-l section missing — shouldn't happen if
+            # exit code was 0 and size was within bounds, but defensive.
+            return self._suggest_similar_files(path, machine)
+
+        try:
+            sample = base64.b64decode(out_lines[1])
+            content_bytes = base64.b64decode(out_lines[2])
+            total_lines = int(out_lines[3].strip())
+        except (ValueError, IndexError, Exception):
+            return self._suggest_similar_files(path, machine)
+
         if _is_binary_file(path, sample):
             return {
                 "status": "binary",
@@ -319,18 +357,9 @@ class FileOperations:
                 "error": "Binary file cannot be displayed as text.",
             }
 
-        end_line = offset + limit - 1
-        read_cmd = f"sed -n {offset},{end_line}p {q_path}"
-        result = self._backend.exec_oneoff(machine, read_cmd)
-        if result.get("exit_code") not in (0, None):
-            return self._suggest_similar_files(path, machine)
-        text, _bom = _strip_bom(_strip_terminal_fence_leaks(result.get("output", "") or ""))
-
-        wc_result = self._backend.exec_oneoff(machine, f"wc -l < {q_path}")
-        try:
-            total_lines = int(wc_result.get("output", "").strip())
-        except ValueError:
-            total_lines = 0
+        text, _bom = _strip_bom(
+            _strip_terminal_fence_leaks(content_bytes.decode("utf-8", errors="replace"))
+        )
 
         truncated = total_lines > end_line
         hint = None

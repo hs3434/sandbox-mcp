@@ -556,17 +556,32 @@ class SandboxEnv:
                     "backend": info.backend,
                     "status": info.status,
                     "purpose": info.purpose or "",
-                    "shells": len(self._shells.list_shells(machine=name)),
+                    "shells": self._shells.count_shells(machine=name),
                     "uptime": _format_uptime(self._machines.get_created_at(name)),
                 }
             )
         return {"machines": machines}
 
     def _op_status(self, params):
-        default = self._machines.get_default()
-        machines = self._op_machine_list({})["machines"]
+        # Build machine list inline so we don't pay the cost of
+        # _op_machine_list constructing full shell dicts just to take
+        # their length.  list_shells() (the top-level `shells` field)
+        # is still one O(S) pass, but no longer two.
+        machines = []
+        for name in self._machines.list_machines():
+            info = self._machines.get_info(name)
+            machines.append(
+                {
+                    "name": name,
+                    "backend": info.backend,
+                    "status": info.status,
+                    "purpose": info.purpose or "",
+                    "shells": self._shells.count_shells(machine=name),
+                    "uptime": _format_uptime(self._machines.get_created_at(name)),
+                }
+            )
         return {
-            "default_machine": default,
+            "default_machine": self._machines.get_default(),
             "machines": machines,
             "shells": self._shells.list_shells(),
         }

@@ -121,12 +121,14 @@ class ShellSession:
         stdout = proc.stdout  # BufferedReader; readline() returns bytes
 
         while True:
+            # Block until stdout has data or EOF.  The 0.1s poll loop we
+            # used to have here woke up 10x/sec per idle shell, burning
+            # CPU for nothing — readline() handles the partial-line wait
+            # itself, and EOF shows up as a ready fd.
             try:
-                ready, _, _ = select.select([stdout], [], [], 0.1)
+                select.select([stdout], [], [])
             except (ValueError, OSError):
                 break
-            if not ready:
-                continue
             try:
                 line = stdout.readline()
             except (ValueError, OSError):
@@ -134,15 +136,19 @@ class ShellSession:
             if not line:
                 # EOF: bash closed its stdout.
                 break
-            self._store_output(line)
-
             start_tag = (
                 self._pending_start_marker.encode("utf-8") if self._pending_start_marker else None
             )
             end_tag = self._pending_end_marker.encode("utf-8") if self._pending_end_marker else None
+            # Skip the protocol's own marker lines so the head/tail
+            # buffer doesn't carry junk that _get_buffered_output has to
+            # regex-strip on every read.  The sub stays as a defensive
+            # fallback for any marker that slips through (e.g. if a
+            # future code path forgets the skip).
+            is_our_marker = False
             if start_tag is not None and not self._start_event.is_set() and start_tag in line:
                 self._start_event.set()
-
+                is_our_marker = True
             if end_tag is not None and not self._end_event.is_set():
                 end_prefix = end_tag + b":"
                 if end_prefix in line:
@@ -153,6 +159,9 @@ class ShellSession:
                     except ValueError:
                         self._pending_exit_code = 0
                     self._end_event.set()
+                    is_our_marker = True
+            if not is_our_marker:
+                self._store_output(line)
 
         self._state = "terminated"
         self._start_event.set()
