@@ -1426,6 +1426,7 @@ def test_docker_exec_process_poll_returns_running_and_exit():
     so the next shell can report why the previous one died.
     """
     from unittest.mock import MagicMock
+
     from sandbox_mcp.backends.docker_backend import DockerExecProcess
 
     api = MagicMock()
@@ -1438,16 +1439,14 @@ def test_docker_exec_process_poll_returns_running_and_exit():
     # Pipe fds so __init__ doesn't crash.
     import os
 
-    r_in, w_in = os.pipe()
-    r_out, w_out = os.pipe()
+    _r_in, _w_in = os.pipe()
+    _r_out, _w_out = os.pipe()
 
     # Replace sock with a real socket pair so sendall/recv don't crash.
     import socket
 
-    a, b = socket.socketpair()
-    container.client.api.exec_start.return_value = type(
-        "S", (), {"_sock": a}
-    )()
+    a, _b = socket.socketpair()
+    container.client.api.exec_start.return_value = type("S", (), {"_sock": a})()
 
     proc = DockerExecProcess(container, ["bash"])
 

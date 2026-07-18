@@ -81,7 +81,18 @@ class ShellRegistry:
             # explicitly notices and calls shell_remove.
             if entry["session"].state != "terminated":
                 return existing
+            # Capture the dying session's info BEFORE close() — close()
+            # nulls out _process, making bash_pid unreadable.  Attach
+            # the snapshot to the replacement so the agent sees the
+            # previous_shell field on its next shell_exec response.
+            prev = _capture_for_replacement(entry["session"])
             self.close(existing)
+            session = factory()
+            shell_id = self.open(machine, session, purpose="default")
+            if prev is not None:
+                session.attach_previous_shell(prev)
+            self._default_shells[machine] = shell_id
+            return shell_id
         session = factory()
         shell_id = self.open(machine, session, purpose="default")
         self._default_shells[machine] = shell_id
