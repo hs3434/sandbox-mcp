@@ -575,7 +575,7 @@ regenerate it on restart without the file present.
 - **No PTY / interactive stdin.** Commands run non-interactively. Commands that expect a TTY (vim, ssh password prompts) are not supported.
 - **State is in-memory.** Shell sessions are lost on server restart; re-create with `shell_new`. Containers survive restart and can be reattached via `docker_run` or inspected via `docker_ps`.
 - **Shell auto-restarts on death.** If the agent runs `exit` (or bash dies for any other reason), the next `shell_exec` transparently runs in a fresh bash. The response includes a `bash_pid` field — track it across calls; if it changes, all in-shell state (exports, cwd, background jobs) is gone. Persist any state you need across restarts via files, not env vars.
-  - The **first response after restart** also carries a one-shot `previous_shell` snapshot (`previous_bash_pid`, `last_command`, `exit_reason`, `exit_code`); act on it then — it won't appear again.
+  - The **first response after restart** also carries a one-shot `previous_shell` snapshot (`previous_bash_pid`, `last_command`, `exit_reason`, `exit_code`); act on it then — it won't appear again.  (These fields are deliberately not surfaced in the tool description — agents discover them from the response itself, which keeps the per-session tool-list context cost down.)
 - **No built-in session isolation.** Multiple agents connecting to the same server share the same machine/shell registry. This matches Hermes's own MCP behavior.
 
 ## Architecture Overview

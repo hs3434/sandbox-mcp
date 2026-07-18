@@ -119,11 +119,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "shell_exec",
         "description": (
-            "Execute a shell command. wait=true (default) blocks until "
-            "completion or timeout. Response carries `bash_pid`; on "
-            "the FIRST call after a self-heal, also a one-shot "
-            "`previous_shell` snapshot of the dead shell "
-            "(previous_bash_pid, last_command, exit_reason, exit_code)."
+            "Execute a shell command. wait=true (default) blocks until completion or timeout."
         ),
         "inputSchema": {
             "type": "object",
@@ -149,10 +145,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "shell_read",
-        "description": (
-            "Read new output from a shell (non-blocking). Same "
-            "`bash_pid` / one-shot `previous_shell` fields as shell_exec."
-        ),
+        "description": "Read new output from a shell (non-blocking).",
         "inputSchema": {
             "type": "object",
             "properties": {
