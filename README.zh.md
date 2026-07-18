@@ -530,6 +530,7 @@ Pass it as: Authorization: Bearer <token>
 - **SSH backend 只支持 key 认证**。当前版本不支持密码认证。
 - **没有 PTY / 交互式 stdin**。命令非交互运行。需要 TTY 的命令（vim、ssh 密码提示）不支持。
 - **状态在内存里**。Shell session 服务端重启后丢失，重新 `shell_new`。容器能跨重启存活，重新 `docker_run` 挂载，或 `docker_ps` 查看。
+- **Shell 死后会自动重启**。Agent 跑 `exit`（或 bash 因其他原因挂掉）后，下一次 `shell_exec` 会透明地跑在一个新的 bash 里。响应里带 `bash_pid` 字段 —— agent 跨调用跟踪它，变了说明 shell 重启过，内存里所有状态（exports、cwd、后台任务）都没了。需要跨重启保留的状态请存文件，不要靠环境变量。
 - **没有 session 隔离**。多个 agent 连同一个 server 共享 machine / shell registry。这跟 Hermes 自带的 MCP 行为一致。
 
 ## 架构概览

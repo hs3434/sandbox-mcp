@@ -25,7 +25,37 @@ def test_send_wait_true_simple_command():
     assert result["status"] == "completed"
     assert result["exit_code"] == 0
     assert "hello world" in result["output"]
+    assert "bash_pid" in result, "send() result must include bash_pid"
+    assert isinstance(result["bash_pid"], int)
     session.close()
+
+
+def test_bash_pid_changes_after_shell_exit_and_recreate():
+    """After exit, the next send() runs in a fresh bash → different pid.
+
+    This is the signal agents use to detect that the shell was restarted
+    (e.g. after self-heal in get_or_create_default) and that any
+    in-memory state (exports, cwd, jobs) is gone.
+    """
+    from sandbox_mcp.shell_registry import ShellRegistry
+
+    reg = ShellRegistry()
+    s1 = reg.get_or_create_default("dev", lambda: ShellSession(["bash"]))
+    pid1 = reg.get(s1).bash_pid
+    assert pid1 is not None
+
+    # Simulate shell death: agent ran ``exit 0``.  The drain thread will
+    # set state="terminated" when bash closes stdout, so the next
+    # get_or_create_default should self-heal.
+    session1 = reg.get(s1)
+    session1.send("exit 0", wait=True, timeout=5)
+    assert session1.state == "terminated"
+
+    s2 = reg.get_or_create_default("dev", lambda: ShellSession(["bash"]))
+    assert s2 != s1, "self-heal should have replaced the dead default"
+    pid2 = reg.get(s2).bash_pid
+    assert pid2 != pid1, f"new shell must have a different bash pid (was {pid1}, now {pid2})"
+    reg.close(s2)
 
 
 def test_send_wait_true_preserves_state():

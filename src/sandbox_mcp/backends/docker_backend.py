@@ -228,13 +228,17 @@ class DockerExecProcess:
 
     def __init__(self, container, cmd):
         self._container = container
-        self._exec_id = container.client.api.exec_create(
+        exec_id = container.client.api.exec_create(
             container.id,
             cmd,
             stdin=True,
             stdout=True,
             stderr=True,
         )["Id"]
+        # Private form used by exec_inspect / kill paths; public alias so
+        # ShellSession.bash_pid can surface a stable process identifier.
+        self._exec_id = exec_id
+        self.exec_id = exec_id
         self._sock = container.client.api.exec_start(
             self._exec_id,
             detach=False,

@@ -175,6 +175,17 @@ class ShellSession:
         else:
             self._tail.extend(data)
 
+    def _with_pid(self, result: dict) -> dict:
+        """Tag a result dict with the current bash process id.
+
+        Agents track this across calls; a change means the shell was
+        restarted and in-memory state (exports, cwd, jobs) is gone.
+        """
+        pid = self.bash_pid
+        if pid is not None:
+            result["bash_pid"] = pid
+        return result
+
     def send(self, command, wait=True, timeout=30, max_output=None):
         """Send a command to the shell.
 
@@ -184,25 +195,32 @@ class ShellSession:
         ``max_output`` defaults to the configured per-session cap
         (``[shell] default_max_output``); pass an explicit value to
         override for one call.
+
+        Every result dict includes ``bash_pid`` so callers can detect
+        when the underlying shell has been restarted.
         """
         if max_output is None:
             max_output = self.DEFAULT_MAX_OUTPUT
         with self._lock:
             if self._state in ("terminated", "closed"):
-                return {
-                    "output": "",
-                    "exit_code": None,
-                    "status": "error",
-                    "error": "Shell is terminated",
-                }
+                return self._with_pid(
+                    {
+                        "output": "",
+                        "exit_code": None,
+                        "status": "error",
+                        "error": "Shell is terminated",
+                    }
+                )
             if self._state in ("busy", "running"):
-                return {
-                    "output": "",
-                    "exit_code": None,
-                    "status": "error",
-                    "error": "Shell is busy (previous command still running). "
-                    "Use shell_read to check or shell_remove to kill.",
-                }
+                return self._with_pid(
+                    {
+                        "output": "",
+                        "exit_code": None,
+                        "status": "error",
+                        "error": "Shell is busy (previous command still running). "
+                        "Use shell_read to check or shell_remove to kill.",
+                    }
+                )
 
             marker = uuid.uuid4().hex
             start_marker = f"__START_{marker}__"
@@ -230,7 +248,7 @@ class ShellSession:
                 self._process.stdin.flush()
             except (BrokenPipeError, OSError):
                 self._state = "terminated"
-                return {"output": "", "exit_code": None, "status": "terminated"}
+                return self._with_pid({"output": "", "exit_code": None, "status": "terminated"})
 
         if wait:
             if self._end_event.wait(timeout=timeout):
@@ -239,44 +257,48 @@ class ShellSession:
                 with self._lock:
                     if self._state != "terminated":
                         self._state = "idle"
-                return {"output": output, "exit_code": exit_code, "status": "completed"}
+                return self._with_pid(
+                    {"output": output, "exit_code": exit_code, "status": "completed"}
+                )
             output = self._get_buffered_output(max_output)
             with self._lock:
                 if self._state == "busy":
                     self._state = "running"
-            return {"output": output, "exit_code": None, "status": "running"}
+            return self._with_pid({"output": output, "exit_code": None, "status": "running"})
 
         if self._start_event.wait(timeout=2.0):
             with self._lock:
                 if self._state == "terminated":
-                    return {"status": "terminated", "confirmed": False}
-            return {"status": "running", "confirmed": True}
+                    return self._with_pid({"status": "terminated", "confirmed": False})
+            return self._with_pid({"status": "running", "confirmed": True})
         with self._lock:
             if self._state == "terminated":
-                return {"status": "terminated", "confirmed": False}
-        return {"status": "running", "confirmed": False}
+                return self._with_pid({"status": "terminated", "confirmed": False})
+        return self._with_pid({"status": "running", "confirmed": False})
 
     def read(self):
         """Non-blocking read of new output from the buffer."""
         with self._lock:
             if self._state == "terminated":
                 output = self._get_buffered_output(self.DEFAULT_MAX_OUTPUT)
-                return {"output": output, "status": "terminated"}
+                return self._with_pid({"output": output, "status": "terminated"})
 
             if self._state == "idle":
-                return {"output": "", "status": "idle"}
+                return self._with_pid({"output": "", "status": "idle"})
 
             if self._end_event.is_set() and self._pending_exit_code is not None:
                 output = self._get_buffered_output(self.DEFAULT_MAX_OUTPUT)
                 self._state = "idle"
-                return {
-                    "output": output,
-                    "exit_code": self._pending_exit_code,
-                    "status": "completed",
-                }
+                return self._with_pid(
+                    {
+                        "output": output,
+                        "exit_code": self._pending_exit_code,
+                        "status": "completed",
+                    }
+                )
 
             output = self._get_buffered_output(self.DEFAULT_MAX_OUTPUT)
-            return {"output": output, "status": "running"}
+            return self._with_pid({"output": output, "status": "running"})
 
     def _get_buffered_output(self, max_output):
         """Get buffered output, truncating if necessary."""
@@ -342,6 +364,22 @@ class ShellSession:
     @property
     def state(self):
         return self._state
+
+    @property
+    def bash_pid(self):
+        """Underlying bash process identifier (or None for external procs).
+
+        Local ``bash`` Popen: real OS PID (int).
+        External ``DockerExecProcess`` / SSH: backend-specific ID (str) —
+        for Docker it's the exec instance ID returned by the daemon.
+        Changes between calls mean the shell was restarted, so any
+        in-memory state (exports, cwd, jobs) is gone.
+        """
+        proc = self._process
+        if proc is None:
+            return None
+        # DockerExecProcess exposes exec_id publicly; Popen exposes pid.
+        return getattr(proc, "exec_id", None) or getattr(proc, "pid", None)
 
     @property
     def last_command(self):
