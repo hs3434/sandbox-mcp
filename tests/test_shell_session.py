@@ -288,6 +288,52 @@ def test_exit_reason_default_is_unknown():
     session.close()
 
 
+# ---------- previous_shell one-shot delivery ----------
+
+
+def test_with_pid_includes_previous_shell_one_shot():
+    """_with_pid injects previous_shell once, then clears it."""
+    session = ShellSession(["bash"])
+    info = {
+        "previous_bash_pid": 12345,
+        "last_command": "rm -rf /",
+        "exit_reason": "exit",
+        "exit_code": 1,
+    }
+    session.attach_previous_shell(info)
+    result1 = session._with_pid({"status": "completed"})
+    assert result1.get("previous_shell") == info
+
+    # Second call: cleared, no previous_shell.
+    result2 = session._with_pid({"status": "completed"})
+    assert "previous_shell" not in result2
+    session.close()
+
+
+def test_with_pid_omits_previous_shell_when_none_attached():
+    """No prior attach → no previous_shell key."""
+    session = ShellSession(["bash"])
+    result = session._with_pid({"status": "completed"})
+    assert "previous_shell" not in result
+    session.close()
+
+
+def test_with_pid_preserves_bash_pid_alongside_previous_shell():
+    """Both fields can coexist; one-shot only clears previous_shell."""
+    session = ShellSession(["bash"])
+    info = {
+        "previous_bash_pid": 12345,
+        "last_command": "exit",
+        "exit_reason": "exit",
+        "exit_code": 0,
+    }
+    session.attach_previous_shell(info)
+    result = session._with_pid({"status": "completed"})
+    assert "bash_pid" in result  # current shell's pid
+    assert "previous_shell" in result  # and prior shell's info
+    session.close()
+
+
 # ---------- _health_check ----------
 
 

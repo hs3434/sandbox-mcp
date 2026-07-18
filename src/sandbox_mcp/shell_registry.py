@@ -132,3 +132,22 @@ class ShellRegistry:
             self.close(sid)
             count += 1
         return count
+
+
+def _capture_for_replacement(dead_session):
+    """Snapshot info about a dead session.  Returns None if there's
+    nothing meaningful to report (e.g. session never had a real process).
+
+    Called BEFORE ``close()`` so ``bash_pid`` is still readable
+    (``close()`` nulls out ``_process``).  The returned dict becomes
+    the ``previous_shell`` field on the replacement shell's first
+    response.
+    """
+    if dead_session.bash_pid is None:
+        return None
+    return {
+        "previous_bash_pid": dead_session.bash_pid,
+        "last_command": dead_session.last_command,
+        "exit_reason": dead_session.exit_reason,
+        "exit_code": dead_session.last_exit_code,
+    }

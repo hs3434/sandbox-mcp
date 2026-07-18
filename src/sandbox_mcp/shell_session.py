@@ -233,15 +233,31 @@ class ShellSession:
         else:
             self._tail.extend(data)
 
+    def attach_previous_shell(self, info: dict | None) -> None:
+        """Attach info about a previously-dead shell this one replaces.
+
+        ``_with_pid`` injects this into the next ``send``/``read``
+        result (one-shot) so agents can see why the previous bash died.
+        Pass ``None`` to explicitly clear any pending attachment.
+        """
+        self._previous_shell_info = info
+
     def _with_pid(self, result: dict) -> dict:
         """Tag a result dict with the current bash process id.
 
         Agents track this across calls; a change means the shell was
         restarted and in-memory state (exports, cwd, jobs) is gone.
+
+        Also injects ``previous_shell`` once (one-shot delivery) if a
+        ``_previous_shell_info`` snapshot is attached — see
+        :meth:`attach_previous_shell`.
         """
         pid = self.bash_pid
         if pid is not None:
             result["bash_pid"] = pid
+        if self._previous_shell_info is not None:
+            result["previous_shell"] = self._previous_shell_info
+            self._previous_shell_info = None  # one-shot
         return result
 
     def send(self, command, wait=True, timeout=30, max_output=None):
