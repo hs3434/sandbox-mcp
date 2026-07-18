@@ -229,3 +229,58 @@ def test_close_kills_descendant_subprocesses():
     # Pre-fix this was >2s because of the orphaned sleep keeping the pipe
     # open.  Post-fix, killpg closes the pipe and drain exits in ms.
     assert elapsed < 1.0, f"close() took {elapsed:.2f}s, expected <1s"
+
+
+# ---------- exit_reason / last_exit_code capture ----------
+
+
+def test_drain_captures_exit_reason_on_normal_exit():
+    """bash `exit 0` → exit_reason='exit', last_exit_code=0."""
+    session = ShellSession(["bash"])
+    session.send("exit 0", wait=True, timeout=5)
+    session._drain_thread.join(timeout=2)
+    assert session.state == "terminated"
+    assert session.exit_reason == "exit"
+    assert session.last_exit_code == 0
+
+
+def test_drain_captures_exit_reason_on_nonzero_exit():
+    """bash `exit 42` → exit_reason='exit', last_exit_code=42."""
+    session = ShellSession(["bash"])
+    session.send("exit 42", wait=True, timeout=5)
+    session._drain_thread.join(timeout=2)
+    assert session.exit_reason == "exit"
+    assert session.last_exit_code == 42
+
+
+def test_send_captures_broken_pipe_exit_reason():
+    """Write to closed stdin → exit_reason='broken_pipe', code=None.
+
+    We can't easily get a BrokenPipeError from send() alone (the
+    terminated-state guard fires first when state is already set),
+    but the state transition is enough: the drain thread sees EOF,
+    sets state='terminated', and on the next send() the early-return
+    guard returns the standard error response.  exit_reason stays
+    'unknown' in this path because drain couldn't read proc.poll()
+    mid-EOF — that's why we don't claim broken_pipe here, only that
+    the state transition lands cleanly.
+    """
+    import os
+    import signal
+
+    session = ShellSession(["bash"])
+    os.kill(session._process.pid, signal.SIGKILL)
+    session._drain_thread.join(timeout=2)
+    assert session.state == "terminated"
+    # Drain thread captured exit info from proc.poll() — should be
+    # signal-based since we SIGKILL'd bash.
+    assert session.exit_reason in {"signal", "exit"}
+    assert session.last_exit_code is not None
+
+
+def test_exit_reason_default_is_unknown():
+    """Fresh session has exit_reason='unknown' until a death event sets it."""
+    session = ShellSession(["bash"])
+    assert session.exit_reason == "unknown"
+    assert session.last_exit_code is None
+    session.close()

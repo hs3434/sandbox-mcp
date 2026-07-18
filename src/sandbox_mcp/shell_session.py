@@ -82,6 +82,15 @@ class ShellSession:
         self._end_event = threading.Event()
 
         self._drain_thread = None
+        # Death-tracking fields.  Set when the underlying process
+        # transitions to terminated (drain thread EOF, broken pipe,
+        # or kill).  Read by ``_capture_for_replacement`` so the next
+        # shell can report why the previous one died.
+        self.exit_reason: str = "unknown"
+        self.last_exit_code: int | None = None
+        # One-shot snapshot of a prior shell's death info; cleared by
+        # ``_with_pid`` after the next ``send``/``read`` consumes it.
+        self._previous_shell_info: dict | None = None
         self._start()
 
     def _start(self):
@@ -162,6 +171,23 @@ class ShellSession:
                     is_our_marker = True
             if not is_our_marker:
                 self._store_output(line)
+
+        # Bash closed stdout (EOF).  Capture exit info before the
+        # process attribute goes away so the next self-heal can
+        # report *why* the previous shell died.
+        proc = self._process
+        if proc is not None:
+            rc = getattr(proc, "poll", lambda: None)()
+            if rc is None:
+                # Process still alive but pipe closed — should not
+                # happen for a normal Popen, defensive fallback.
+                self.exit_reason = "unknown"
+            elif rc < 0:
+                self.exit_reason = "signal"
+                self.last_exit_code = -rc
+            else:
+                self.exit_reason = "exit"
+                self.last_exit_code = rc
 
         self._state = "terminated"
         self._start_event.set()
@@ -257,6 +283,8 @@ class ShellSession:
                 self._process.stdin.flush()
             except (BrokenPipeError, OSError):
                 self._state = "terminated"
+                self.exit_reason = "broken_pipe"
+                self.last_exit_code = None
                 return self._with_pid({"output": "", "exit_code": None, "status": "terminated"})
 
         if wait:
