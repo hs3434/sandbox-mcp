@@ -942,6 +942,9 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
             "StartedAt": "2026-07-16T10:00:01Z",
             "FinishedAt": "0001-01-01T00:00:00Z",
             "Health": {"Status": "healthy"},
+            "OOMKilled": False,
+            "Dead": False,
+            "Pid": 12345,
         },
         "Config": {
             "Image": "python:3.12-slim",
@@ -975,6 +978,10 @@ def test_docker_inspect_returns_curated_view(docker_backend, mock_client):
     assert result["state"]["exit_code"] == 0
     assert result["state"]["restart_count"] == 2
     assert result["state"]["health"] == "healthy"
+    # Diagnostic fields that let the agent detect restart loops and OOM:
+    assert result["state"]["oom_killed"] is False
+    assert result["state"]["dead"] is False
+    assert result["state"]["pid"] == 12345
     assert result["cmd"] == ["python", "-m", "http.server"]
     assert result["entrypoint"] is None
     assert result["mounts"] == [
@@ -1019,6 +1026,39 @@ def test_docker_inspect_container_not_found(docker_backend, mock_client):
 
     assert result["status"] == "error"
     assert "not here" in result["error"]
+
+
+def test_docker_inspect_surfaces_oom_and_restart_loop_signals(docker_backend, mock_client):
+    """Curated state block must surface OOMKilled, Dead, Pid so the agent
+    can detect a container in a restart loop or killed by OOM without
+    falling back to raw=True.  These come from the daemon's State dict
+    and are not synthesised."""
+    container = mock_client.containers.get.return_value
+    container.attrs = {
+        "State": {
+            "Status": "restarting",  # typical restart-loop signature
+            "Running": False,
+            "ExitCode": 137,  # 128 + SIGKILL = OOM
+            "RestartCount": 4,
+            "OOMKilled": True,
+            "Dead": False,
+            "Pid": 0,
+            "Error": "container has been killed by the OS",
+        },
+        "Config": {"Image": "alpine:3"},
+        "HostConfig": {"RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 3}},
+        "Mounts": [],
+    }
+    container.short_id = "abc"
+
+    result = docker_backend.inspect("crashbox")
+
+    state = result["state"]
+    assert state["oom_killed"] is True
+    assert state["dead"] is False
+    assert state["pid"] == 0
+    # combo lets the agent recognise "restart loop, killed by OOM":
+    assert state["restart_count"] >= 1 and state["oom_killed"] and state["exit_code"] == 137
 
 
 def test_docker_inspect_image_returns_curated_view(docker_backend, mock_client):

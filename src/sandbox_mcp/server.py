@@ -119,8 +119,8 @@ TOOL_DEFINITIONS = [
     {
         "name": "shell_exec",
         "description": (
-            "Execute a shell command. wait=true (default) blocks until completion or timeout. "
-            "[machine]"
+            "Execute a shell command on the target machine. wait=true "
+            "(default) blocks until completion or timeout. [machine]"
         ),
         "inputSchema": {
             "type": "object",
@@ -231,10 +231,12 @@ TOOL_DEFINITIONS = [
     {
         "name": "env",
         "description": (
-            "Environment management: action=help lists all available operations. "
-            "action=status shows current state. Management actions (shell_new, "
-            "shell_remove, shell_list, machine_list, default_set) are also "
-            "available as top-level tools."
+            "Environment management. action=help lists available actions "
+            "(summary form by default; topic=<name> returns full docs for "
+            "one action). action=status shows current state. Management "
+            "actions (shell_new, shell_remove, shell_list, machine_list, "
+            "default_set) are also available as top-level tools. See "
+            "action=help note for how sandbox_shell_exec routes per backend."
         ),
         "inputSchema": {
             "type": "object",
@@ -242,6 +244,12 @@ TOOL_DEFINITIONS = [
                 "action": {
                     "type": "string",
                     "description": "Operation name. Start with help or status.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": (
+                        "With action=help: full docs for one action (e.g. topic='docker_run')."
+                    ),
                 },
                 "params": {
                     "type": "object",

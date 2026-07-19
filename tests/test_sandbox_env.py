@@ -47,6 +47,40 @@ def test_help_returns_operations_and_pointers(sandbox_env):
     assert "docker_ps" in actions
 
 
+def test_help_default_returns_summary_only(sandbox_env):
+    """Default help is summary-only: each op is {action, summary}, no
+    description/params/returns. Agents pay the full-doc cost only when
+    they ask for a specific topic."""
+    result = sandbox_env.dispatch("help", {})
+    for op in result["operations"]:
+        assert "summary" in op, op
+        # Long-form fields must be stripped by default.
+        assert "description" not in op
+        assert "optional" not in op
+        assert "required" not in op
+        assert "returns" not in op
+
+
+def test_help_topic_returns_full_doc_for_one_action(sandbox_env):
+    """env(action='help', topic='docker_run') returns the full per-action
+    doc (description, params, returns) for that single op — instead of
+    forcing the agent to read every action's full text to find one."""
+    result = sandbox_env.dispatch("help", {"topic": "docker_run"})
+    assert result["topic"] == "docker_run"
+    op = result["operation"]
+    assert op["action"] == "docker_run"
+    assert "description" in op
+    assert "summary" in op
+    assert op["required"]["image"] == "string"
+
+
+def test_help_topic_unknown_returns_error(sandbox_env):
+    """An unknown topic is a clear error, not a silent empty result."""
+    result = sandbox_env.dispatch("help", {"topic": "nonexistent"})
+    assert "error" in result
+    assert "nonexistent" in result["error"]
+
+
 def test_docker_help_is_removed(sandbox_env):
     result = sandbox_env.dispatch("docker_help", {})
     assert "error" in result
@@ -132,6 +166,9 @@ def test_status_returns_state(sandbox_env):
 def test_shell_new(sandbox_env):
     backend = MagicMock()
     shell = MagicMock()
+    # Make the session's state attribute a real string (not a Mock) so
+    # the dispatcher's result building can read it without recursing.
+    shell.state = "idle"
     backend.open_shell.return_value = shell
     sandbox_env._machines.resolve_machine.return_value = "dev"
     sandbox_env._machines.get_backend.return_value = backend
@@ -139,7 +176,29 @@ def test_shell_new(sandbox_env):
     result = sandbox_env.dispatch("shell_new", {"machine": "dev", "purpose": "server"})
     backend.open_shell.assert_called_once_with("dev")
     sandbox_env._shells.open.assert_called_once_with("dev", shell, purpose="server")
-    assert result == {"shell_id": "sh_abc", "machine": "dev"}
+    # shell_new returns shell_id+machine+state so the agent can see
+    # whether the new session is idle and ready without a shell_list call.
+    assert result["shell_id"] == "sh_abc"
+    assert result["machine"] == "dev"
+    assert result["state"] == "idle"
+    # bash_pid is only surfaced for live states (busy/running), not idle.
+    assert "bash_pid" not in result
+
+
+def test_shell_new_includes_bash_pid_when_running(sandbox_env):
+    """A shell_new with a session already busy carries bash_pid, so the
+    agent can e.g. attach a debugger without a separate lookup."""
+    backend = MagicMock()
+    shell = MagicMock()
+    shell.state = "busy"
+    shell.bash_pid = 4242
+    backend.open_shell.return_value = shell
+    sandbox_env._machines.resolve_machine.return_value = "dev"
+    sandbox_env._machines.get_backend.return_value = backend
+    sandbox_env._shells.open.return_value = "sh_abc"
+    result = sandbox_env.dispatch("shell_new", {"machine": "dev"})
+    assert result["state"] == "busy"
+    assert result["bash_pid"] == 4242
 
 
 def test_shell_remove(sandbox_env):
@@ -168,6 +227,66 @@ def test_docker_run(sandbox_env):
     )
     assert result["status"] == "running"
     assert result["backend"] == "docker"
+
+
+def test_docker_run_includes_inspect_fields(sandbox_env):
+    """On a successful docker_run the response is augmented with
+    curated inspect fields (image/id/cmd/mounts/state) so the agent
+    doesn't need a follow-up docker_inspect just to see what was
+    actually created."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    info = TargetInfo(name="dev", backend="docker", status="running", purpose="test")
+    sandbox_env._machines.register.return_value = info
+    sandbox_env._docker.inspect.return_value = {
+        "id": "abc123def456",
+        "image": "python:3.12-slim",
+        "cmd": ["python", "-m", "http.server"],
+        "mounts": [{"source": "/h", "destination": "/workspace", "mode": "rw"}],
+        "state": {"status": "running", "running": True, "restart_count": 0},
+    }
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
+    assert result["id"] == "abc123def456"
+    assert result["image"] == "python:3.12-slim"
+    assert result["cmd"] == ["python", "-m", "http.server"]
+    assert result["mounts"] == [{"source": "/h", "destination": "/workspace", "mode": "rw"}]
+    assert result["state"]["status"] == "running"
+    sandbox_env._docker.inspect.assert_called_once_with("dev")
+
+
+def test_docker_run_skips_inspect_when_register_failed(sandbox_env):
+    """If the container failed to start (status=error), we don't bother
+    calling inspect — the agent should call docker_inspect explicitly
+    if they want diagnostics."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    info = TargetInfo(name="dev", backend="docker", status="error", error="boom")
+    sandbox_env._machines.register.return_value = info
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
+    assert result["status"] == "error"
+    assert result["error"] == "boom"
+    sandbox_env._docker.inspect.assert_not_called()
+
+
+def test_docker_run_inspect_failure_does_not_break_response(sandbox_env):
+    """If the post-create inspect raises (race / daemon blip), the
+    docker_run response is still returned without the enriched fields —
+    the agent can call docker_inspect separately if needed."""
+    from sandbox_mcp.backends.base import TargetInfo
+
+    info = TargetInfo(name="dev", backend="docker", status="running", purpose="test")
+    sandbox_env._machines.register.return_value = info
+    sandbox_env._docker.inspect.side_effect = RuntimeError("daemon blip")
+    result = sandbox_env.dispatch(
+        "docker_run", {"name": "dev", "image": "python:3.12", "purpose": "test"}
+    )
+    assert result["status"] == "running"
+    assert "id" not in result
+    assert "mounts" not in result
 
 
 def test_docker_run_surfaces_reattach_note_and_error(sandbox_env):

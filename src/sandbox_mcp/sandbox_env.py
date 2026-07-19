@@ -39,16 +39,19 @@ HELP_RESPONSE = {
     "default_actions": [
         {
             "action": "help",
+            "summary": "List management actions (summary by default; topic=X for full docs).",
             "description": "Discover common management actions and backend help entries.",
         },
         {
             "action": "status",
+            "summary": "Show default machine, machines, and shells.",
             "description": "Show current state: default machine, machine list, shell list.",
         },
     ],
     "operations": [
         {
             "action": "machine_list",
+            "summary": "List all registered machines.",
             "description": (
                 "List all registered machines with backend, status, "
                 "purpose, shell count, and uptime. Lighter than status "
@@ -58,6 +61,7 @@ HELP_RESPONSE = {
         },
         {
             "action": "default_set",
+            "summary": "Set the default machine (machine=X) or default shell (shell_id=X).",
             "description": (
                 "Set default machine or default shell. Pass machine to set "
                 "the default machine. Pass shell_id to set that shell as "
@@ -69,11 +73,13 @@ HELP_RESPONSE = {
         },
         {
             "action": "shell_new",
+            "summary": "Create an additional shell session on a machine.",
             "description": "Create an additional shell session on a machine.",
             "optional": {"machine": "string", "purpose": "string"},
         },
         {
             "action": "shell_remove",
+            "summary": "Terminate and remove a shell session.",
             "description": (
                 "Terminate and remove a shell session. If already "
                 "terminated, remove the registry entry."
@@ -82,16 +88,22 @@ HELP_RESPONSE = {
         },
         {
             "action": "shell_list",
+            "summary": "List all shells, optionally filtered by machine.",
             "description": "List all shells, optionally filtered by machine.",
             "optional": {"machine": "string"},
         },
     ],
     "note": (
-        "Core tools are directly exposed as shell_exec, "
-        "shell_read, and file_read/write/patch/search. "
+        "Core tools are exposed directly: sandbox_shell_exec runs commands "
+        "in the machine's persistent session — equivalent to "
+        "`docker exec -it <container> bash` on Docker machines and "
+        "`ssh <host>` on SSH machines. sandbox_shell_read for non-blocking "
+        "output, sandbox_file_read/write/patch/search for files. "
         "Management actions (shell_new, shell_remove, shell_list, "
-        "machine_list, default_set) are top-level tools. "
-        "All tools target the default machine, override with [machine] param."
+        "machine_list, default_set) are also top-level tools. "
+        "All tools target the default machine unless a [machine] param is "
+        "passed. For full action docs call "
+        'env(action="help", topic="<action>").'
     ),
 }
 
@@ -100,6 +112,7 @@ DOCKER_HELP_RESPONSE = {
     "operations": [
         {
             "action": "docker_run",
+            "summary": "Create and start a Docker container (idempotent — reattaches by name).",
             "description": (
                 "Create and start a Docker container. Idempotent: "
                 "same name re-attaches to existing container. "
@@ -140,6 +153,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_ps",
+            "summary": "List sandbox-mcp-managed containers (also refreshes the registry).",
             "description": (
                 "List sandbox-mcp-managed containers: queries the daemon "
                 "for every container carrying the `sandbox-mcp.managed=true` "
@@ -161,6 +175,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_images",
+            "summary": "List available Docker images.",
             "description": "List available Docker images (direct daemon query).",
             "returns": [
                 {"tag": "string", "image_id": "string", "created": "string", "size_mb": "number"}
@@ -168,6 +183,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_image_history",
+            "summary": "Layer-by-layer build history for one image.",
             "description": (
                 "Layer-by-layer build history for a single image "
                 "(mirrors ``docker history <image>``).  Use this when you "
@@ -192,6 +208,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_build",
+            "summary": "Build a Docker image from a Dockerfile in /workspace.",
             "description": (
                 "Build a Docker image from a Dockerfile already written "
                 "into a sandboxed container's /workspace/ via "
@@ -239,6 +256,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_commit",
+            "summary": "Save container state as a new image (image_tag required).",
             "description": (
                 "Save container state as a new image.  image_tag is REQUIRED "
                 "(format 'repo:tag', e.g. 'myapp:v1') — sandbox-mcp does not "
@@ -254,6 +272,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_stop",
+            "summary": "Stop container (state preserved, can docker_start to resume).",
             "description": ("Stop container. State preserved, can docker_start to resume."),
             "required": {"machine": "string"},
             "returns": {
@@ -264,6 +283,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_start",
+            "summary": "Start a stopped container.",
             "description": (
                 "Start a stopped container.  Verification is a single "
                 "post-start state reload — not polling, no timeout, no "
@@ -281,6 +301,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_remove",
+            "summary": "Stop and remove container (closes its shells).",
             "description": ("Stop and remove container. Closes all shells for the machine."),
             "required": {"machine": "string"},
             "returns": {
@@ -291,6 +312,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_inspect",
+            "summary": "Curated container or image config (raw=true for full attrs).",
             "description": (
                 "Curated config for a container (kind='container', default) "
                 "or image (kind='image'). "
@@ -348,6 +370,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_logs",
+            "summary": "Read container logs (one-shot, merged stdout+stderr).",
             "description": (
                 "Read container logs (one-shot, merged stdout+stderr). "
                 "Works on stopped containers (primary use: read why a "
@@ -364,6 +387,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_diff",
+            "summary": "Filesystem changes vs the image (A/C/D) — useful before docker_commit.",
             "description": (
                 "Filesystem changes vs the container's image, grouped by "
                 "kind: A (added), C (changed), D (deleted).  Useful before "
@@ -377,6 +401,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_stats",
+            "summary": "One-shot CPU / memory / network / block IO snapshot.",
             "description": (
                 "One-shot resource snapshot: cpu_percent, memory usage/limit, "
                 "network rx/tx (aggregated across all interfaces), block IO "
@@ -393,6 +418,7 @@ DOCKER_HELP_RESPONSE = {
         },
         {
             "action": "docker_restart",
+            "summary": "Atomic restart (stop then start, same post-check as docker_start).",
             "description": (
                 "Atomic restart (stop then start) with the same "
                 "post-check as docker_start: single post-restart state "
@@ -417,6 +443,7 @@ SSH_HELP_RESPONSE = {
     "operations": [
         {
             "action": "ssh_connect",
+            "summary": "Connect to an SSH remote machine (key auth only).",
             "description": "Connect to an SSH remote machine (key auth only).",
             "required": {"name": "string", "host": "string", "user": "string", "purpose": "string"},
             "optional": {
@@ -443,6 +470,7 @@ SSH_HELP_RESPONSE = {
         },
         {
             "action": "ssh_disconnect",
+            "summary": "Close SSH connection (remote machine untouched).",
             "description": "Close SSH connection. Remote machine is not affected.",
             "required": {"machine": "string"},
             "returns": {
@@ -453,6 +481,7 @@ SSH_HELP_RESPONSE = {
         },
         {
             "action": "ssh_reconnect",
+            "summary": "Re-establish SSH connection (shells lost on disconnect).",
             "description": "Re-establish SSH connection. Shells are lost on disconnect.",
             "required": {"machine": "string"},
             "returns": {
@@ -463,6 +492,7 @@ SSH_HELP_RESPONSE = {
         },
         {
             "action": "ssh_remove",
+            "summary": "Unregister SSH machine (remote machine untouched).",
             "description": "Unregister SSH machine. Remote machine is not affected.",
             "required": {"machine": "string"},
             "returns": {
@@ -544,14 +574,42 @@ class SandboxEnv:
     # ---- discovery ----
 
     def _op_help(self, params):
-        ops = list(HELP_RESPONSE["operations"])
-        ops.extend(d.get("_help_entry", d) for d in DOCKER_HELP_RESPONSE["operations"])
+        params = params or {}
         cfg = _load_config()
+        # Build the canonical action index.  Order: HELP_RESPONSE (core)
+        # then DOCKER_HELP_RESPONSE (always available — DockerBackend
+        # is always imported), then SSH only when SSH is configured.
+        all_ops: list[dict] = []
+        all_ops.extend(HELP_RESPONSE["operations"])
+        all_ops.extend(DOCKER_HELP_RESPONSE["operations"])
         if cfg.ssh.default_host:
-            ops.extend(SSH_HELP_RESPONSE["operations"])
+            all_ops.extend(SSH_HELP_RESPONSE["operations"])
+
+        topic = params.get("topic")
+        if topic:
+            for op in all_ops:
+                if op.get("action") == topic:
+                    return {"topic": topic, "operation": op}
+            return {
+                "error": (
+                    f"Unknown action: {topic!r}. "
+                    "Call action=help (no topic) to list available actions."
+                ),
+            }
+
+        # Default: compact summary form (action + summary one-liner).
+        # Saves ~70% tokens vs returning every long description; the
+        # agent asks for per-action detail via topic=<action>.
+        # To inspect multiple actions, call help(topic=X) per action.
         return {
             "default_actions": HELP_RESPONSE["default_actions"],
-            "operations": ops,
+            "note": HELP_RESPONSE.get("note", ""),
+            "operations": [
+                {"action": op["action"], "summary": op.get("summary", "")}
+                for op in all_ops
+                if "action" in op
+            ],
+            "usage": 'help(topic="<action>") for full docs of one action.',
         }
 
     def _op_machine_list(self, params):
@@ -647,7 +705,17 @@ class SandboxEnv:
         backend = self._machines.get_backend(machine)
         session = backend.open_shell(machine)
         shell_id = self._shells.open(machine, session, purpose=params.get("purpose", "manual"))
-        return {"shell_id": shell_id, "machine": machine}
+        # Surface the shell's live state so the agent can see whether
+        # the new session is idle and ready, or already busy — without
+        # having to call shell_list right after creation.
+        result: dict[str, Any] = {
+            "shell_id": shell_id,
+            "machine": machine,
+            "state": session.state,
+        }
+        if session.state in ("busy", "running"):
+            result["bash_pid"] = session.bash_pid
+        return result
 
     def _op_shell_remove(self, params):
         if "shell_id" not in params:
@@ -682,6 +750,20 @@ class SandboxEnv:
         result["backend"] = "docker"
         if result.get("status") == "running":
             _inject_admin_info(params["name"], result)
+            # Augment with a fresh curated inspect snapshot so the agent
+            # sees image/id/cmd/mounts/state in the same response — saves
+            # a separate docker_inspect round-trip immediately after
+            # create.  Best-effort: inspect failure (e.g. race during a
+            # very fast create-then-exit) is silently ignored; the
+            # agent can still call docker_inspect directly.
+            try:
+                detail = self._docker.inspect(params["name"])
+            except Exception:
+                detail = None
+            if isinstance(detail, dict) and "error" not in detail:
+                for key in ("image", "id", "cmd", "mounts", "state"):
+                    if key in detail:
+                        result[key] = detail[key]
         return result
 
     def _op_docker_build(self, params):
