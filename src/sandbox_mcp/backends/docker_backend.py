@@ -34,11 +34,18 @@ import shlex
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sandbox_mcp.backends.base import Backend, TargetInfo
 from sandbox_mcp.config import get_work_dir, get_work_home
 from sandbox_mcp.config import load as _load_config
 from sandbox_mcp.shell_session import ShellSession
+
+if TYPE_CHECKING:
+    # Used in type annotations only (``from __future__ import annotations``
+    # makes these strings at runtime, so the module never imports docker
+    # eagerly — keeping the SSH-only deployment path import-free).
+    import docker.errors as docker_errors
 
 
 def _docker_module():
@@ -48,7 +55,7 @@ def _docker_module():
     return docker
 
 
-def _docker_error(e: Exception) -> dict:
+def _docker_error(e: docker_errors.APIError) -> dict:
     """Translate a docker SDK exception to the standard MCP error dict.
 
     Used at the catch sites that just want to surface the daemon's
