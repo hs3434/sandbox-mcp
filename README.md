@@ -618,12 +618,24 @@ See [docs/implementation-plan.md](docs/implementation-plan.md) for the TDD imple
 
 ## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE)
-(AGPL-3.0-only).
+This project is **dual-licensed**:
 
-- **Open-source use** — you are free to use, modify, and distribute this software
-  under the terms of the AGPLv3, including the requirement that modified versions
-  serving users over a network must also provide their source code.
-- **Commercial use** — if you wish to use this software in a closed-source or
-  proprietary context without the AGPLv3 obligations, a separate commercial
-  license is available. Contact **1606272735@qq.com** for details.
+- **Open-source use** — [GNU Affero General Public License v3.0](LICENSE)
+  (AGPL-3.0-only). You are free to use, modify, and distribute this software
+  under the terms of the AGPLv3, including the requirement that modified
+  versions serving users over a network must also provide their source code.
+- **Commercial use** — if you wish to use this software in a closed-source
+  or proprietary context without the AGPLv3 obligations (notably the
+  source-disclosure obligation of Section 13), a separate commercial
+  license is available. Email **1606272735@qq.com** with a description of
+  your intended use; terms (fee, term, seat count) are negotiated
+  per-engagement.
+
+### Contributing
+
+By submitting a contribution you agree to the project's
+[contribution terms](CONTRIBUTING.md#1-contribution-license--sign-off):
+your contribution is licensed under AGPLv3, and the maintainer is
+permitted to relicense it under the commercial terms above. See
+[**CONTRIBUTING.md**](CONTRIBUTING.md) for the development workflow, code
+style, and sign-off instructions.

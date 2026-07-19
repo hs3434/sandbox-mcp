@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.hs3434/sandbox-mcp",
+  "title": "Sandbox MCP",
+  "description": "Persistent Docker/SSH sandbox for AI agents: shell exec, file ops, audit log.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/hs3434/sandbox-mcp",
+    "source": "github"
+  },
+  "license": "AGPL-3.0-only OR Commercial-License",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "sandbox-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

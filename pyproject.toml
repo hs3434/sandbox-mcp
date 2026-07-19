@@ -7,14 +7,32 @@ name = "sandbox-mcp"
 version = "0.2.0"
 description = "Sandbox Environment Manager MCP server"
 requires-python = ">=3.12"
-license = {text = "AGPL-3.0-only"}
+license = {text = "AGPL-3.0-only OR Commercial-License"}
 authors = [{name = "Sandbox MCP Contributors"}]
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "License :: Other/Proprietary License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
 dependencies = [
     "docker>=7.0.0",
     "mcp>=1.0.0",
     "starlette>=0.36.0",
     "uvicorn>=0.27.0",
 ]
+
+# MCP registry identifier. Lives in [tool.mcp] (not [project]) because
+# setuptools >=68 rejects unknown keys in [project] under strict PEP 621
+# validation, breaking `pip install .`. The authoritative source for MCP
+# registry publishing is ``server.json`` in the repo root; this table
+# exists so any tool that introspects pyproject.toml can also recover it.
+[tool.mcp]
+name = "io.github.hs3434/sandbox-mcp"
 
 [project.optional-dependencies]
 dev = [
