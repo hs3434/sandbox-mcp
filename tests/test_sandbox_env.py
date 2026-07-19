@@ -42,13 +42,25 @@ def test_help_returns_operations_and_pointers(sandbox_env):
     assert "shell_new" in actions
     assert "shell_remove" in actions
     assert "shell_list" in actions
-    assert "more_help" in result
-    assert "docker_help" in result["more_help"]
-    assert "ssh_help" in result["more_help"]
+    assert "docker_run" in actions
+    assert "docker_build" in actions
+    assert "docker_ps" in actions
 
 
-def test_docker_help_returns_docker_ops(sandbox_env):
+def test_docker_help_is_removed(sandbox_env):
     result = sandbox_env.dispatch("docker_help", {})
+    assert "error" in result
+    assert "Unknown action" in result["error"]
+
+
+def test_ssh_help_is_removed(sandbox_env):
+    result = sandbox_env.dispatch("ssh_help", {})
+    assert "error" in result
+    assert "Unknown action" in result["error"]
+
+
+def test_help_includes_docker_ops(sandbox_env):
+    result = sandbox_env.dispatch("help", {})
     actions = [op["action"] for op in result["operations"]]
     # Lifecycle
     assert "docker_run" in actions
@@ -66,15 +78,6 @@ def test_docker_help_returns_docker_ops(sandbox_env):
     assert "docker_diff" in actions
     assert "docker_stats" in actions
     assert "docker_restart" in actions
-
-
-def test_ssh_help_returns_ssh_ops(sandbox_env):
-    result = sandbox_env.dispatch("ssh_help", {})
-    actions = [op["action"] for op in result["operations"]]
-    assert "ssh_connect" in actions
-    assert "ssh_disconnect" in actions
-    assert "ssh_reconnect" in actions
-    assert "ssh_remove" in actions
 
 
 def test_default_set_sets_default_machine(sandbox_env):

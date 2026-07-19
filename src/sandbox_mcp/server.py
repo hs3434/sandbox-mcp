@@ -119,7 +119,8 @@ TOOL_DEFINITIONS = [
     {
         "name": "shell_exec",
         "description": (
-            "Execute a shell command. wait=true (default) blocks until completion or timeout."
+            "Execute a shell command. wait=true (default) blocks until completion or timeout. "
+            "[machine]"
         ),
         "inputSchema": {
             "type": "object",
@@ -129,10 +130,7 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Specific shell (default: machine's default shell)",
                 },
-                "machine": {
-                    "type": "string",
-                    "description": "Machine name (default: default machine)",
-                },
+                "machine": {"type": "string"},
                 "wait": {"type": "boolean", "description": "Wait for completion (default: true)"},
                 "timeout": {"type": "integer", "description": "Seconds to wait (default: 30)"},
                 "max_output": {
@@ -156,15 +154,12 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "file_read",
-        "description": "Read a text file with line numbers and pagination.",
+        "description": "Read a text file with line numbers and pagination. [machine]",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "machine": {
-                    "type": "string",
-                    "description": "Machine name (default: default machine)",
-                },
+                "machine": {"type": "string"},
                 "offset": {"type": "integer", "description": "Start line (1-indexed, default: 1)"},
                 "limit": {"type": "integer", "description": "Max lines (default: 500, max: 2000)"},
             },
@@ -176,17 +171,14 @@ TOOL_DEFINITIONS = [
         "description": (
             "Write content to a file, replacing existing. "
             "Creates parent dirs. Runs syntax check for known "
-            "extensions."
+            "extensions. [machine]"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
                 "content": {"type": "string", "description": "Complete file content"},
-                "machine": {
-                    "type": "string",
-                    "description": "Machine name (default: default machine)",
-                },
+                "machine": {"type": "string"},
             },
             "required": ["path", "content"],
         },
@@ -194,7 +186,7 @@ TOOL_DEFINITIONS = [
     {
         "name": "file_patch",
         "description": "Targeted find-and-replace edits with fuzzy matching. "
-        "mode=replace or mode=patch.",
+        "mode=replace or mode=patch. [machine]",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -204,17 +196,14 @@ TOOL_DEFINITIONS = [
                 "new_string": {"type": "string", "description": "Replacement text (replace mode)"},
                 "replace_all": {"type": "boolean", "description": "Replace all (default: false)"},
                 "patch": {"type": "string", "description": "Patch content (patch mode)"},
-                "machine": {
-                    "type": "string",
-                    "description": "Machine name (default: default machine)",
-                },
+                "machine": {"type": "string"},
             },
             "required": ["mode"],
         },
     },
     {
         "name": "file_search",
-        "description": "Search file contents (ripgrep) or find files by name (glob).",
+        "description": "Search file contents (ripgrep) or find files by name (glob). [machine]",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -224,10 +213,7 @@ TOOL_DEFINITIONS = [
                     "enum": ["content", "files"],
                     "description": "default: content",
                 },
-                "machine": {
-                    "type": "string",
-                    "description": "Machine name (default: default machine)",
-                },
+                "machine": {"type": "string"},
                 "path": {"type": "string", "description": "Directory to search (default: cwd)"},
                 "file_glob": {"type": "string", "description": "Filter files (e.g. *.py)"},
                 "limit": {"type": "integer", "description": "Max results (default: 50)"},
@@ -245,9 +231,10 @@ TOOL_DEFINITIONS = [
     {
         "name": "env",
         "description": (
-            "Environment management. Call action=help to discover "
-            "operations or action=status for current state. "
-            "Other actions are discovered on demand."
+            "Environment management: action=help lists all available operations. "
+            "action=status shows current state. Management actions (shell_new, "
+            "shell_remove, shell_list, machine_list, default_set) are also "
+            "available as top-level tools."
         ),
         "inputSchema": {
             "type": "object",
@@ -262,6 +249,78 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "shell_new",
+        "description": (
+            "Create an additional shell session on a machine. "
+            "Use when the default shell is busy. [machine]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "machine": {"type": "string"},
+                "purpose": {"type": "string", "description": "Human-readable label"},
+            },
+        },
+    },
+    {
+        "name": "shell_remove",
+        "description": (
+            "Terminate and remove a shell session (any state: idle, busy, running, terminated)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "shell_id": {"type": "string", "description": "Shell to remove"},
+            },
+            "required": ["shell_id"],
+        },
+    },
+    {
+        "name": "shell_list",
+        "description": (
+            "List all shell sessions with shell_id, machine, "
+            "status, bash_pid, last_command, is_default."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "machine": {"type": "string", "description": "Filter by machine (optional)"},
+            },
+        },
+    },
+    {
+        "name": "machine_list",
+        "description": (
+            "List all registered machines with backend, status, purpose, shell count, and uptime."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "default_set",
+        "description": (
+            "Set the default target machine or default shell. When a default machine is set, "
+            "all tools (shell_exec, file_read, file_write, file_patch, file_search, shell_new) "
+            "route to it automatically unless [machine] is passed explicitly. "
+            "Pass exactly one of machine or shell_id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "machine": {
+                    "type": "string",
+                    "description": "Machine name to set as default",
+                },
+                "shell_id": {
+                    "type": "string",
+                    "description": "Shell ID to set as default for its machine",
+                },
+            },
         },
     },
 ]
@@ -481,7 +540,7 @@ class SandboxServer:
             machine = self._resolve_machine(args)
             backend = self.machines.get_backend(machine)
             try:
-                sid = self.shells.get_or_create_default(
+                shell_id = self.shells.get_or_create_default(
                     machine, lambda: backend.open_shell(machine)
                 )
             except ShellUnhealthy as e:
@@ -498,9 +557,16 @@ class SandboxServer:
                     "error": f"[machine={machine!r}] {e}",
                     "machine": machine,
                 }
-            session = self.shells.get(sid)
+            session = self.shells.get(shell_id)
 
-        return session.send(args["command"], wait=wait, timeout=timeout, max_output=max_output)
+        result = session.send(args["command"], wait=wait, timeout=timeout, max_output=max_output)
+        if result.get("status") == "error" and "busy" in result.get("error", ""):
+            result["shell_id"] = shell_id
+            result["escape_routes"] = {
+                "shell_new": "Create a fresh shell with shell_new()",
+                "shell_remove": f"Kill this shell with shell_remove(shell_id='{shell_id}')",
+            }
+        return result
 
     def _handle_shell_read(self, args):
         session = self.shells.get(args["shell_id"])
@@ -556,6 +622,21 @@ class SandboxServer:
             output_mode=args.get("output_mode", "content"),
             context=args.get("context", 0),
         )
+
+    def _handle_shell_new(self, args):
+        return self.sandbox_env.dispatch("shell_new", args)
+
+    def _handle_shell_remove(self, args):
+        return self.sandbox_env.dispatch("shell_remove", args)
+
+    def _handle_shell_list(self, args):
+        return self.sandbox_env.dispatch("shell_list", args)
+
+    def _handle_machine_list(self, args):
+        return self.sandbox_env.dispatch("machine_list", args)
+
+    def _handle_default_set(self, args):
+        return self.sandbox_env.dispatch("default_set", args)
 
     # ---- audit_query handler ----
 

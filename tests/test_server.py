@@ -85,7 +85,10 @@ def test_sandbox_env_help(server):
     result = server.call_tool("env", {"action": "help"})
     data = json.loads(result[0].text)
     assert "operations" in data
-    assert "more_help" in data
+    assert "default_actions" in data
+    actions = [op["action"] for op in data["operations"]]
+    assert "docker_run" in actions
+    assert "docker_build" in actions
 
 
 def test_sandbox_env_status_empty(server):

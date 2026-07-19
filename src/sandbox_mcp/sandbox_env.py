@@ -31,6 +31,7 @@ from typing import Any
 from sandbox_mcp.backends.base import TargetInfo
 from sandbox_mcp.backends.docker_backend import DockerBackend
 from sandbox_mcp.backends.ssh_backend import SSHBackend
+from sandbox_mcp.config import load as _load_config
 
 logger = logging.getLogger(__name__)
 
@@ -85,19 +86,12 @@ HELP_RESPONSE = {
             "optional": {"machine": "string"},
         },
     ],
-    "more_help": {
-        "docker_help": (
-            "Discover Docker machine actions: run/build/commit/stop/start/"
-            "restart/remove/ps/images/image_history/inspect/logs/diff/stats"
-        ),
-        "ssh_help": "Discover SSH machine actions: connect/disconnect/reconnect/remove",
-    },
     "note": (
         "Core tools are directly exposed as shell_exec, "
         "shell_read, and file_read/write/patch/search. "
-        "Machine-aware tools support optional machine. "
-        "Docker containers also have an inter-container share at "
-        "/share/ for collaboration (see docker_run for details)."
+        "Management actions (shell_new, shell_remove, shell_list, "
+        "machine_list, default_set) are top-level tools. "
+        "All tools target the default machine, override with [machine] param."
     ),
 }
 
@@ -108,45 +102,19 @@ DOCKER_HELP_RESPONSE = {
             "action": "docker_run",
             "description": (
                 "Create and start a Docker container. Idempotent: "
-                "if a container with the same name already exists "
-                "(e.g. after an MCP restart), the call attaches to "
-                "it instead of creating a new one. "
-                "**Does not override the image's CMD/ENTRYPOINT** — the "
-                "container runs whatever the image author specified. "
-                "postgres / redis / jupyter / etc. start as real services; "
-                "to run a generic image as an exec-only sandbox, use one "
-                "with a long-lived CMD (e.g. your own image based on "
-                "ubuntu with ``CMD sleep infinity``). "
-                "Networking: every container joins a shared user-defined "
-                "bridge (default `sandbox-mcp`, configurable via "
-                "[docker] auto_network); sibling containers reach each "
-                "other by the same name you passed to docker_run — "
-                "e.g. from inside the container named `dev`, reach `db` "
-                "via `psql -h db`. No host port mapping is needed for "
-                "inter-container access; this tool exposes no `ports` "
-                "option because the bridge network makes it unnecessary. "
-                "Filesystem: a per-machine host directory under "
-                "work_home/<machine> is auto-bind-mounted to /workspace "
-                "and exposed as the container's working directory.  "
-                "Inter-container sharing is automatic: every container "
-                "also sees work_home/<share_subdir>/ (default `_share/`) "
-                "bind-mounted at /share/.  The "
-                "container's own subdirectory at /share/<machine>/ is "
-                "read-write, every other peer machine's subdirectory is "
-                "read-only.  Convention: write shared artefacts to "
-                "/share/<machine>/, read peers' output from "
-                '/share/<peer>/.  Set `[storage] share_subdir = ""` '
-                "to disable.  Arbitrary host paths remain unmountable "
-                "(sandbox boundary) — no `/etc`, `/root`, or docker socket "
-                "ever leaks into a container via sandbox-mcp.  "
-                "Admin machine (special): when ``name`` matches "
-                "``[docker] admin_machine`` (default `admin`), the container "
-                "gets an extra bind of the WHOLE work_home tree at ``/host`` "
-                "(rw) in addition to its own ``/workspace`` — use this for "
-                "cross-machine cleanup/inspection.  Operations through "
-                "``/host`` are irreversible; agents should default to "
-                "``/workspace`` for own work and only target ``/host/<peer>/`` "
-                "explicitly."
+                "same name re-attaches to existing container. "
+                "The container runs the image's CMD/ENTRYPOINT "
+                "(e.g. postgres starts as a service); for a generic "
+                "exec sandbox use an image with CMD ['sleep', 'infinity']. "
+                "Networking: containers on the shared bridge reach each "
+                "other by name (e.g. from 'dev' reach 'db' via 'psql -h db'). "
+                "Filesystem: /workspace is bind-mounted from the host "
+                "(per-machine work_home). "
+                "Share: /share/ is bind-mounted; /share/<your-name>/ is rw, "
+                "/share/<peer>/ is ro — write artefacts for others under "
+                "/share/<your-name>/. "
+                "Admin: when name matches [docker] admin_machine, also "
+                "mounts /host (rw) for cross-machine inspection."
             ),
             "required": {"name": "string", "image": "string", "purpose": "string"},
             "optional": {
@@ -567,13 +535,15 @@ class SandboxEnv:
     # ---- discovery ----
 
     def _op_help(self, params):
-        return HELP_RESPONSE
-
-    def _op_docker_help(self, params):
-        return DOCKER_HELP_RESPONSE
-
-    def _op_ssh_help(self, params):
-        return SSH_HELP_RESPONSE
+        ops = list(HELP_RESPONSE["operations"])
+        ops.extend(d.get("_help_entry", d) for d in DOCKER_HELP_RESPONSE["operations"])
+        cfg = _load_config()
+        if cfg.ssh.default_host:
+            ops.extend(SSH_HELP_RESPONSE["operations"])
+        return {
+            "default_actions": HELP_RESPONSE["default_actions"],
+            "operations": ops,
+        }
 
     def _op_machine_list(self, params):
         """Lighter-weight alternative to status: machines only, no shells."""
@@ -705,6 +675,15 @@ class SandboxEnv:
         # see why a container failed to stay running.
         result = info.to_response(name_key="name")
         result["backend"] = "docker"
+        if result.get("status") == "running":
+            cfg = _load_config()
+            if params["name"] == cfg.docker.admin_machine:
+                result["admin"] = {
+                    "host_mount": "/host",
+                    "warning": (
+                        "Operations via /host are irreversible; prefer /workspace for own work"
+                    ),
+                }
         return result
 
     def _op_docker_build(self, params):
